@@ -8,8 +8,10 @@ Este archivo captura DÓNDE nos quedamos, para no repetir trabajo ni perder lo v
 
 ## Resumen en una línea
 
-✅ **ACCESO AL RADIO RESUELTO — DOS VÍAS, misma llave, sin password.** Ya se leyeron
-todas las specs del radio (ver abajo). Toca decidir el toolchain de build y empezar el APK.
+✅ **APP IMPLEMENTADA Y CONSTRUIDA.** El acceso al radio está resuelto (dos vías SSH sin
+password), las specs del radio leídas, el toolchain instalado, y la app entera escrita
+con 40 pruebas JVM en verde y APK de release listo y servido por HTTP.
+Falta solo probarla en el carro encendido.
 
 ### Cómo conectarse ahora mismo
 
@@ -92,14 +94,70 @@ toolchain de Kotlin/Android genere ese ABI y no solo arm64.
 
 ---
 
-## Toolchain de build (NO instalado todavía)
+## Toolchain de build (✅ INSTALADO)
 
-Para compilar el APK del tablero falta: **JDK + Android SDK**. Solo está `platform-tools`
-(adb) en `~/Android/Sdk`. Es descarga de varios GB. No se ha empezado a petición de
-enfocarnos primero en el acceso al radio.
+| Pieza | Dónde |
+|---|---|
+| JDK 17 (Temurin) | `C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot` |
+| Android SDK | `C:\Users\Usuario\Android\Sdk` — platform 34, build-tools 34.0.0, platform-tools |
+| Gradle 8.7 | `C:\Users\Usuario\tools\gradle-8.7` (sin wrapper: se invoca directo) |
 
-Decisiones de build ya tomadas (ver spec): Kotlin nativo, `DashView` con Canvas (no Compose),
-minSdk 21, métrico puro (km/h/°C), sin modo demo, interpolación de aguja a 60 fps.
+Comando de build (pruebas + APK):
+
+```
+$env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot"
+$env:ANDROID_HOME="$env:USERPROFILE\Android\Sdk"
+& "$env:USERPROFILE\tools\gradle-8.7\bin\gradle.bat" -p C:\Users\Usuario\s2000 testDebugUnitTest assembleRelease
+```
+
+`local.properties` usa barras normales (`C:/Users/...`): con backslashes Java se
+come los escapes y Gradle falla con "sintaxis de la etiqueta del volumen no es correcta".
+
+---
+
+## Estado de la app (✅ IMPLEMENTADA)
+
+Todo el diseño está implementado y commiteado. **40 pruebas JVM en verde**, APK de
+release construido (1.7 MB).
+
+| Unidad | Archivo |
+|---|---|
+| Constantes del F20C | `app/src/main/kotlin/.../EngineConstants.kt` |
+| Estado del carro | `.../VehicleState.kt` |
+| Decodificador de PIDs | `.../obd/PidDecoder.kt` |
+| Diálogo AT | `.../obd/Elm327Session.kt` |
+| Round-robin de sondeo | `.../obd/PollScheduler.kt` |
+| Transporte RFCOMM | `.../obd/SppTransport.kt` |
+| Tablero en Canvas | `.../ui/DashView.kt` |
+| Pantalla | `.../DashActivity.kt` |
+
+Detalle que costó encontrar: el reparto de PIDs **no** puede hacerse con módulos
+encadenados (`cycle % 3`, `cycle % 20`...). "Cada 3" y "cada 20" coinciden una de cada
+tres veces y el de mayor prioridad le roba el turno al otro, dejando agua, aire y carga
+por debajo de la frecuencia de §5. Está resuelto con una tabla explícita de 60 ciclos
+(mcm de 3, 10 y 20) con slots disjuntos por construcción.
+
+Nota sobre el ABI: la app es Kotlin puro, sin código nativo, así que el APK sirve para
+cualquier arquitectura — el `armeabi-v7a` de 32 bits del radio incluido. La restricción
+de ABI que preocupaba resultó no aplicar.
+
+### Instalación en el radio
+
+`pm install` por SSH **no** funciona: sin root, Termux (`u0_a83`) no tiene permiso, y
+`/sdcard` tampoco es escribible desde ahí. La vía que sí funciona es la ya probada por
+HTTP, con el servidor de la laptop:
+
+- Página de instalación: **192.168.2.194:8000/radio.html** (botón de un toque)
+- APK directo: **192.168.2.194:8000/dash.apk**
+
+Los archivos servidos viven en el scratchpad de la sesión anterior, en `serve/`.
+
+### Lo único que falta
+
+Validación visual del tacómetro en el radio con el carro encendido (§11 dice
+explícitamente que `DashView` no lleva pruebas automatizadas), y confirmar los riesgos
+abiertos R1 (¿el Steren es SPP o BLE?) y R5 (¿el AP1 habla ISO 9141-2?) — ambos se
+responden solos al primer arranque: el badge de arriba muestra el protocolo que negoció.
 
 ---
 
