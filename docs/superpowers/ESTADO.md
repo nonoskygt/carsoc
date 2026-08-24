@@ -1,168 +1,238 @@
 # S2000 Dash — Estado y punto de retomada
 
-**Última actualización:** 2026-08-23 (noche, sesión 2)
+**Última actualización:** 2026-08-24
 
-Este archivo captura DÓNDE nos quedamos, para no repetir trabajo ni perder lo verificado.
+Este archivo captura DÓNDE nos quedamos y, sobre todo, **qué ya se descartó con
+evidencia**, para no repetir callejones sin salida.
 
 ---
 
 ## Resumen en una línea
 
-✅ **APP IMPLEMENTADA Y CONSTRUIDA.** El acceso al radio está resuelto (dos vías SSH sin
-password), las specs del radio leídas, el toolchain instalado, y la app entera escrita
-con 40 pruebas JVM en verde y APK de release listo y servido por HTTP.
-Falta solo probarla en el carro encendido.
-
-### Cómo conectarse ahora mismo
-
-Llave (sin passphrase): `radio_key2` / `radio_key2.pub` en el scratchpad de la sesión.
-Pública:
-```
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ7hM7QJe0eYv28jsYu1uhTxEZHDUvP8Ml9uVHUHe4JZ claude-radio-s2000-2
-```
-
-**Vía A — SimpleSSHD (puerto 2222):**
-```
-ssh -i "<scratchpad>\radio_key2" -p 2222 -o BatchMode=yes user@192.168.2.57
-```
-Instalada en `/data/user/0/org.galexander.sshd/files/authorized_keys` (ver bug de ruta abajo).
-
-**Vía B — Termux (puerto 8022):**
-```
-ssh -i "<scratchpad>\radio_key2" -p 8022 -o BatchMode=yes root@192.168.2.57
-```
-Termux SSH acepta cualquier nombre de usuario en el login; el shell real siempre es
-`u0_a83`. Instalada en `~/.ssh/authorized_keys` de Termux.
-
-Nota: las dos apps corren en sandboxes Android separados (UIDs distintos, sin root) —
-no se puede tocar los archivos de una desde una sesión SSH en la otra. Cada vía se
-arregló por separado, entrando por su propia OTP.
-
-### Historial del bloqueo con SimpleSSHD (ya resuelto, dejar como referencia)
-
-1. Usuario correcto = `user` (confirmado).
-2. La OTP se genera **por conexión entrante**, no por intervalo de tiempo — cada
-   intento nuevo rota la password, así que hay que leerla y usarla en la MISMA
-   conexión (no reconectar). Se resuelve con un script que abre el socket y espera
-   a que el usuario lea la pantalla antes de mandar el password.
-3. Bug real: la ruta de `authorized_keys` NO es `$HOME/.ssh/authorized_keys` sino
-   literalmente `<SSH Path>/authorized_keys` (sin subcarpeta `.ssh`), donde
-   `SSH Path` es un ajuste configurable en Settings → Dropbear → Paths, y por
-   default vale `/data/user/0/org.galexander.sshd/files` (visible también en el
-   menú "Copy App-private Path").
-4. Una vez que SimpleSSHD detecta que existe `authorized_keys`, **deja de generar
-   OTP para cualquier conexión**, incluidas las que solo intentan password. La
-   primera llave generada (`radio_key`, sesión anterior) resultó tener passphrase
-   desconocida y quedó inservible — solución: **Settings → "..." → Reset Keys**
-   en la app (borra el `authorized_keys` viejo, vuelve a pedir OTP), y reinstalar
-   con una llave nueva sin passphrase (`radio_key2`). Guardar esto para la próxima
-   vez que haga falta reinstalar la llave ahí.
+La app está **terminada y desplegándose sola** en el radio. El único bloqueo es
+físico: **el adaptador Steren no acepta ninguna conexión Bluetooth**. En cuanto
+haya un adaptador que responda, el tablero lee el motor.
 
 ---
 
-## Lo que YA funciona (verificado en vivo)
-
-| Cosa | Estado | Detalle |
-|---|---|---|
-| Spec de diseño | ✅ escrito y commiteado | `docs/superpowers/specs/2026-08-23-s2000-dash-design.md` |
-| IP del radio | ✅ `192.168.2.57` | responde a ping (~250 ms), en Wi-Fi `Nonosky.com` |
-| SSH en el radio | ✅ escuchando | puerto **2222**, Dropbear 2020.81 (SimpleSSHD), host key ed25519 `SHA256:Cgf/zaeMb+K5KiBpXBIhApRG9VRN4fcOWWKOxivbcHc` |
-| Servidor HTTP para instalar APKs | ✅ arriba | laptop `192.168.2.194`, puerto **80** y **8000**, sirve `s.apk` (SimpleSSHD) y `t.apk` (Termux). Firewall abierto (reglas `S2000-APK-80` y `S2000-APK-8000`). |
-| El radio descargó Termux por HTTP | ✅ confirmado en log | `192.168.2.57 GET /t.apk 200` |
-| Memoria USB | ✅ reformateada 16 GB FAT32 | letra `E:`, etiqueta RADIO, clúster 8 KB, offset 1 MB. Trae `1-SimpleSSHD.apk`, `2-Termux.apk`, `LEEME.txt` |
-| Apps instaladas en el radio | ✅ SimpleSSHD y Termux | por el usuario |
-| Llave SSH para el radio | ✅ generada | `scratchpad/radio_key` (privada) y `radio_key.pub` (pública). Pública abajo. |
-| Cliente SSH en laptop | ✅ | OpenSSH 9.5p2 + paramiko 5.0.0 |
-
----
-
-## Specs del radio (leídas por SSH, riesgo R2 del spec CERRADO)
+## Hardware (verificado en vivo, no supuesto)
 
 | Cosa | Valor |
 |---|---|
-| Android | **11**, API level **30** |
-| Marca/modelo/device | `rockchip` / `auto_rk_t11` / `auto_rk_t11` |
-| SoC | `rk3326` (`ro.hardware=rk30board`) |
-| ABI | **armeabi-v7a, armeabi** — es de 32 bits puro, **NO arm64-v8a**. Cualquier build/APK debe targetear `armeabi-v7a`. |
-| Pantalla | **1280×480** físico, densidad **160** (ldpi/mdpi real, panel ancho tipo barra) |
-| Root (`su`) | **NO tiene** — confirmado, "No su program found" |
-| ADB por red (`persist.sys.usb.config`) | `none` — no está habilitado; sin root no se puede activar por sistema. |
-
-Implicación directa para el spec: sin root, **no hay `scrcpy` ni control remoto de
-pantalla**, y hay que compilar el APK para `armeabi-v7a` (32-bit) — revisar que el
-toolchain de Kotlin/Android genere ese ABI y no solo arm64.
+| Head unit | Android 11 / API 30, SoC rockchip **rk3326** |
+| ABI | **armeabi-v7a** (32 bits, sin arm64). Irrelevante: la app es Kotlin puro, el APK es universal |
+| Pantalla | **1280×480 físicos @160 dpi** — barra de 2.67:1, muy ancha y baja |
+| Root | **No hay** |
+| IP del radio | `192.168.2.57` |
+| IP de la laptop | `192.168.2.20` — **cambia** (antes fue `.194`, al pasar de Wi-Fi a Ethernet) |
+| Adaptador OBD | **Steren SCAN-010**, MAC `00:1D:A5:68:98:8B`, **tipo CLÁSICO** (no BLE) |
+| Otros emparejados en el radio | `M11` (18:43:A7:1C:0E:65), `elperegrinocosmico` (DC:F0:90:58:E4:9E) |
 
 ---
 
-## Toolchain de build (✅ INSTALADO)
+## EL BLOQUEO ACTUAL
+
+**El tablero no lee el motor.** El Steren aparece en el barrido pero **no acepta
+ninguna conexión**.
+
+### Lo que YA se descartó, con evidencia
+
+| Hipótesis | Cómo se descartó |
+|---|---|
+| Es BLE, no clásico (riesgo R1 del diseño) | El barrido reporta `tipo=CLASICO`. **R1 cerrado.** |
+| Falta teclear el PIN | El confirmador —que ve **todas** las ventanas y **también las notificaciones**— confirma que **nunca aparece diálogo ni notificación** de emparejamiento |
+| El diálogo sale en un paquete no vigilado | Se le quitó el filtro `packageNames`; ve todo |
+| El teléfono tenía tomado el adaptador | Se apagó su Bluetooth; sigue igual |
+| Hace falta emparejar antes de conectar | Se probó **RFCOMM inseguro**, que no lo exige |
+
+### El síntoma exacto
+
+- `createBond()` devuelve `true`, entra en `BONDING` (11) y muere en `NONE` (10)
+  **sin que el adaptador conteste nada**.
+- Las **cuatro** vías de RFCOMM fallan idénticas:
+  `read failed, socket might closed or timeout, read ret: -1`
+  (inseguro-SPP, seguro-SPP, inseguro-canal1, seguro-canal1).
+
+**Conclusión:** es el adaptador o la pila Bluetooth del radio. El software agotó
+lo que puede hacer.
+
+### Próximo paso EXACTO
+
+Emparejar el **Steren con un teléfono** y abrirlo con una app OBD (Torque, Car
+Scanner), con el switch en contacto.
+
+- **Funciona en el teléfono** → el Bluetooth del radio está roto (frecuente en
+  estas ROMs chinas). Salida: usar el **OBDLink MX+** que el usuario ya tiene
+  emparejado en la laptop.
+- **No funciona en el teléfono** → el Steren está muerto o es incompatible.
+
+---
+
+## Control remoto (esto ya funciona; usarlo)
+
+El radio se controla **entero por HTTP** desde la laptop. Puerto `8099`:
+
+| Ruta | Qué hace |
+|---|---|
+| `/state` | Estado del vehículo, del enlace, versión instalada, adaptador elegido, último error |
+| `/shot.png` | El tablero dibujado tal cual se ve (la app se auto-fotografía) |
+| `/log` | Bitácora de actualizaciones |
+| `/update` | Busca e instala versión nueva |
+| `/adaptadores` | Bluetooth ya emparejados |
+| `/buscar` | Barre el aire (reporta tipo y UUIDs) |
+| `/emparejar?mac=` | Empareja y elige |
+| `/elegir?mac=` `/olvidar` | Elige / olvida adaptador |
+| `/instalar-companero?url=&paquete=` | Instala el confirmador (verifica firma) |
+| `/armar-pin?pin=` | Arma el confirmador para teclear el PIN |
+| `/confirmador` | Qué ventanas está viendo el confirmador |
+
+Con esto se desplegaron **12 versiones del tablero y 5 del confirmador sin tocar
+el radio**.
+
+### Publicar una versión
+
+```bash
+bash tools/publicar.sh          # detecta la IP sola
+curl -s http://192.168.2.57:8099/update
+```
+
+`tools/anunciador.py` debe estar corriendo: difunde por UDP 8098 la URL base.
+**La laptop anuncia y el radio escucha**, no al revés, porque el firewall de
+Windows descarta el UDP entrante y abrirlo pide permisos de administrador.
+
+---
+
+## Acceso SSH al radio
+
+```
+ssh -i "<scratchpad>\radio_key2" -p 2222 -o BatchMode=yes user@192.168.2.57
+```
+
+Llave **sin passphrase**. Pública instalada:
+`ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ7hM7QJe0eYv28jsYu1uhTxEZHDUvP8Ml9uVHUHe4JZ`
+
+⚠️ **SimpleSSHD no arranca solo tras reiniciar el carro** salvo que esté activo
+"Start on Boot" en sus ajustes.
+
+### Lo que el shell del radio NO puede hacer (probado, no supuesto)
+
+| Comando | Error |
+|---|---|
+| `pm install` | Llega a `install-create` pero muere en `install-write`: *Reverse mode only supported from shell or system* |
+| `am start` / `am broadcast` | *package=com.android.shell does not belong to uid* |
+| `monkey` | Bloqueado en silencio |
+| `content query` | Requiere `ACCESS_CONTENT_PROVIDERS_EXTERNALLY` |
+| `screencap`, `dumpsys`, `settings` | Sin permiso |
+
+Sí funcionan: `scp`, `pm list/path`, `stat`, `logcat` (solo del propio UID).
+
+---
+
+## Arquitectura
+
+**Dos APK, misma firma** (SHA-256 `97cdb6b0…`) — de eso depende el permiso de
+nivel `signature` entre ellos.
+
+1. **`com.nonosky.s2000dash`** — el tablero. Se auto-actualiza.
+2. **`com.nonosky.s2000dash.confirmador`** — APK aparte con el
+   `AccessibilityService` que pulsa "Instalar" y rellena el PIN.
+
+### Por qué el confirmador va aparte
+
+**Android desactiva el servicio de accesibilidad de una app en cuanto esa app se
+actualiza.** Es una protección deliberada. Se verificó en vivo: el proceso seguía
+corriendo y respondiendo, y aun así dejó de confirmar. Con el confirmador dentro
+del tablero, la cadena de auto-actualización servía **exactamente una vez**.
+
+El tablero puede actualizar al confirmador con `/instalar-companero`: el
+confirmador viejo auto-confirma la instalación del nuevo.
+
+### Componentes
+
+```
+obd/      PidDecoder, Elm327Session, PollScheduler, SppTransport, ObdTransport
+ui/       DashView (Canvas 60 fps, 3 columnas)
+bt/       ObdPairing
+selfupdate/ UpdateChecker, AutoInstaller, ApkVerifier, ServerDiscovery,
+            InstallStatusReceiver, UpdateState
+debug/    DebugServer
+          DashService (foreground, START_STICKY), BootReceiver, EstadoActual
+```
+
+---
+
+## Toolchain
 
 | Pieza | Dónde |
 |---|---|
-| JDK 17 (Temurin) | `C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot` |
-| Android SDK | `C:\Users\Usuario\Android\Sdk` — platform 34, build-tools 34.0.0, platform-tools |
-| Gradle 8.7 | `C:\Users\Usuario\tools\gradle-8.7` (sin wrapper: se invoca directo) |
+| JDK 17 Temurin | `C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot` |
+| Android SDK | `C:\Users\Usuario\Android\Sdk` (platform 34, build-tools 34.0.0) |
+| Gradle 8.7 | `C:\Users\Usuario\tools\gradle-8.7` (sin wrapper) |
 
-Comando de build (pruebas + APK):
-
-```
-$env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot"
-$env:ANDROID_HOME="$env:USERPROFILE\Android\Sdk"
-& "$env:USERPROFILE\tools\gradle-8.7\bin\gradle.bat" -p C:\Users\Usuario\s2000 testDebugUnitTest assembleRelease
-```
-
-`local.properties` usa barras normales (`C:/Users/...`): con backslashes Java se
-come los escapes y Gradle falla con "sintaxis de la etiqueta del volumen no es correcta".
+`local.properties` usa **barras normales** (`C:/Users/...`): con backslashes Java
+se come los escapes y Gradle falla con "sintaxis de la etiqueta del volumen".
 
 ---
 
-## Estado de la app (✅ IMPLEMENTADA)
+## Defectos graves encontrados por auditoría adversarial
 
-Todo el diseño está implementado y commiteado. **40 pruebas JVM en verde**, APK de
-release construido (1.7 MB).
+Se corrieron **3 workflows** de auditoría (39–52 agentes cada uno, ~140 hallazgos,
+20 confirmados tras verificación adversarial). Los que importan:
 
-| Unidad | Archivo |
-|---|---|
-| Constantes del F20C | `app/src/main/kotlin/.../EngineConstants.kt` |
-| Estado del carro | `.../VehicleState.kt` |
-| Decodificador de PIDs | `.../obd/PidDecoder.kt` |
-| Diálogo AT | `.../obd/Elm327Session.kt` |
-| Round-robin de sondeo | `.../obd/PollScheduler.kt` |
-| Transporte RFCOMM | `.../obd/SppTransport.kt` |
-| Tablero en Canvas | `.../ui/DashView.kt` |
-| Pantalla | `.../DashActivity.kt` |
+1. **CRÍTICO** — Todo el I/O de OBD corría en `lifecycleScope`, que despacha en el
+   **hilo principal**. ANR garantizado al conectar el adaptador. Ahora
+   `Dispatchers.IO`, con prueba de regresión.
+2. **ALTO** — `PidDecoder` tomaba `BUS INIT` y `SEARCHING` por errores, pero son
+   **banners que preceden a la trama buena**, y en ISO 9141-2 la primera petición
+   de cada conexión **siempre** trae `BUS INIT`. `probeBus()` fallaba siempre y
+   **no se habría leído un solo dato** con el carro andando. Ahora se parsea línea
+   por línea.
+3. **CRÍTICO (autoinfligido)** — El anuncio UDP sin autenticar + un confirmador que
+   se fiaba del `android:label` = **ejecución de código arbitrario desde la Wi-Fi**.
+   Cerrado con `ApkVerifier` (exige firma idéntica a la propia) y sesión armada en
+   vez de texto de pantalla.
+4. **ALTO** — Una excepción en el hilo de petición del `DebugServer` **mataba el
+   proceso entero**: un simple escaneo de puertos dejaba sin tablero a mitad de
+   camino.
+5. **ALTO** — `ObdPairing` guardaba como adaptador OBD **cualquier** dispositivo
+   emparejado con el radio (bastaba emparejar un teléfono).
+6. **ALTO** — `startDash` se rendía **para siempre** si el Bluetooth estaba apagado
+   al arrancar — el caso normal tras reiniciar el carro.
+7. **Bucle de instalación** — Se revisaba actualización en cada `onStart`, y cerrar
+   el diálogo devolvía el foco → otra instalación. El radio quedaba inservible.
+8. **Reparto de PIDs** — No puede hacerse con módulos encadenados: "cada 3" y
+   "cada 20" coinciden una de cada tres veces y el prioritario le roba el turno al
+   otro. Tabla explícita de 60 ciclos (mcm de 3, 10 y 20).
 
-Detalle que costó encontrar: el reparto de PIDs **no** puede hacerse con módulos
-encadenados (`cycle % 3`, `cycle % 20`...). "Cada 3" y "cada 20" coinciden una de cada
-tres veces y el de mayor prioridad le roba el turno al otro, dejando agua, aire y carga
-por debajo de la frecuencia de §5. Está resuelto con una tabla explícita de 60 ciclos
-(mcm de 3, 10 y 20) con slots disjuntos por construcción.
+---
 
-Nota sobre el ABI: la app es Kotlin puro, sin código nativo, así que el APK sirve para
-cualquier arquitectura — el `armeabi-v7a` de 32 bits del radio incluido. La restricción
-de ABI que preocupaba resultó no aplicar.
+## Aprendizajes operativos (caros de redescubrir)
 
-### Instalación en el radio
+- **Play Protect bloquea** apps de fuera de la tienda que declaran
+  `AccessibilityService`. Hubo que apagarlo en el radio.
+- Los **Ajustes de este radio no listan Accesibilidad**. Se llega por intent desde
+  una actividad propia del confirmador (`AbrirAccesibilidadActivity`).
+- El puente y el actualizador **no pueden vivir en la Activity**: mueren con ella
+  y el radio queda incomunicado. Van en `DashService`.
+- La IP de la laptop **cambia**. Por eso el descubrimiento va por UDP.
+- Cachés de navegador sirven APKs viejos: **publicar con nombre único por versión**.
 
-`pm install` por SSH **no** funciona: sin root, Termux (`u0_a83`) no tiene permiso, y
-`/sdcard` tampoco es escribible desde ahí. La vía que sí funciona es la ya probada por
-HTTP, con el servidor de la laptop:
+---
 
-- Página de instalación: **192.168.2.194:8000/radio.html** (botón de un toque)
-- APK directo: **192.168.2.194:8000/dash.apk**
+## Estado de pruebas
 
-Los archivos servidos viven en el scratchpad de la sesión anterior, en `serve/`.
+**54+ pruebas JVM en verde** entre los dos módulos. Cubren decodificación de PIDs
+(incluida toda la basura del ELM327), el diálogo AT, el reparto del presupuesto de
+K-line, los valores derivados del F20C y las reglas de seguridad del confirmador.
 
-### Lo único que falta
-
-Validación visual del tacómetro en el radio con el carro encendido (§11 dice
-explícitamente que `DashView` no lleva pruebas automatizadas), y confirmar los riesgos
-abiertos R1 (¿el Steren es SPP o BLE?) y R5 (¿el AP1 habla ISO 9141-2?) — ambos se
-responden solos al primer arranque: el badge de arriba muestra el protocolo que negoció.
+`DashView` no lleva pruebas automatizadas por decisión de diseño (§11): se valida a
+ojo — y ya se validó con capturas reales por `/shot.png`.
 
 ---
 
 ## Hardware OBD (recordatorio)
 
-- Adaptador OBD del carro: **Steren Bluetooth SPP/ELM327** (se asume clásico, no BLE — riesgo R1).
-- Protocolo esperado del AP1: **ISO 9141-2 (K-line)**, lento, ~9 lecturas/seg — confirmar con `ATDP`.
-- La laptop también tiene emparejado un **OBDLink MX+** (COM3) que estaba sin corriente (carro apagado).
+- **Steren SCAN-010** — el que no conecta.
+- **OBDLink MX+** — emparejado en la laptop (COM3). **Es la alternativa a probar.**
+- Protocolo esperado del AP1: **ISO 9141-2 (K-line)**, ~9 lecturas/seg. Sin
+  confirmar todavía: hace falta un enlace vivo para que `ATDP` lo diga.
