@@ -26,8 +26,8 @@ android {
         applicationId = "com.nonosky.s2000dash.confirmador"
         minSdk = 21
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 4
+        versionName = "1.3"
     }
 
     buildTypes {

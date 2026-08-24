@@ -79,7 +79,10 @@ class PollScheduler(
                 _state.update { it.copy(connection = ConnectionState.Connecting) }
                 transport = transportFactory()
                 currentTransport = transport
+                val t0 = clock()
                 transport.connect()
+                com.nonosky.s2000dash.EstadoActual.ultimoErrorEnlace =
+                    "conectado en " + (clock() - t0) + " ms"
 
                 _state.update { it.copy(connection = ConnectionState.Initializing) }
                 val session = Elm327Session(transport)
@@ -99,6 +102,8 @@ class PollScheduler(
             } catch (e: Exception) {
                 coroutineContext.ensureActive()   // cancelacion no es un fallo
                 Log.w(TAG, "Ciclo de conexion caido: ${e.message}")
+                com.nonosky.s2000dash.EstadoActual.ultimoErrorEnlace =
+                    e.javaClass.simpleName + ": " + e.message
             } finally {
                 runCatching { transport?.close() }
                 if (currentTransport === transport) currentTransport = null

@@ -33,6 +33,44 @@ object ApkVerifier {
         data class Rechazado(val motivo: String) : Result()
     }
 
+    /**
+     * Verifica un APK acompanante (p. ej. el confirmador).
+     *
+     * No se exige que sea nuestro propio paquete, pero SI que lleve nuestra
+     * firma: eso es lo que impide que alguien de la red nos cuele un APK
+     * cualquiera aprovechando que el descubrimiento va sin autenticar.
+     */
+    fun verifyCompanion(context: Context, apk: File, paqueteEsperado: String): Result {
+        val pm = context.packageManager
+        val info = leer(pm, apk) ?: return Result.Rechazado("el archivo no es un APK legible")
+
+        if (info.packageName != paqueteEsperado) {
+            return Result.Rechazado("es otro paquete: ${info.packageName}")
+        }
+        val huellasApk = huellas(info)
+        if (huellasApk.isEmpty()) return Result.Rechazado("el APK no trae firma")
+
+        val propias = runCatching { huellas(pm.getPackageInfo(context.packageName, flags())) }
+            .getOrDefault(emptySet())
+        if (propias.isEmpty()) return Result.Rechazado("no se pudo leer la firma propia")
+        if (huellasApk.intersect(propias).isEmpty()) {
+            Log.w(TAG, "Firma distinta en acompanante")
+            return Result.Rechazado("la firma no es la nuestra")
+        }
+        return Result.Ok
+    }
+
+    private fun flags(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            @Suppress("DEPRECATION")
+            PackageManager.GET_SIGNATURES
+        }
+
+    private fun leer(pm: PackageManager, apk: File): PackageInfo? =
+        runCatching { pm.getPackageArchiveInfo(apk.absolutePath, flags()) }.getOrNull()
+
     fun verify(context: Context, apk: File, versionCodeEsperado: Int): Result {
         val pm = context.packageManager
 

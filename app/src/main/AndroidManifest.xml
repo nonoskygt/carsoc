@@ -94,6 +94,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- Lo que el confirmador ve en pantalla; sin esto no hay forma de
+             depurarlo, porque no tiene pantalla ni logs accesibles. -->
+        <receiver
+            android:name=".ConfirmadorReceiver"
+            android:exported="true"
+            android:permission="com.nonosky.s2000dash.permission.ARMAR">
+            <intent-filter>
+                <action android:name="com.nonosky.s2000dash.CONFIRMADOR_DICE" />
+            </intent-filter>
+        </receiver>
+
         <!-- Desenlace de cada sesion de instalacion. -->
         <receiver
             android:name=".selfupdate.InstallStatusReceiver"

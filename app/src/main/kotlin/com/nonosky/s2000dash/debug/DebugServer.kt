@@ -170,6 +170,23 @@ class DebugServer(
                     runCatching { EstadoActual.olvidarAdaptador?.invoke() }
                     sendText(out, 200, "application/json", """{"olvidado":true}""")
                 }
+                "/instalar-companero" -> {
+                    val res = runCatching {
+                        EstadoActual.instalarCompanero?.invoke(
+                            consulta["url"] ?: "", consulta["paquete"] ?: ""
+                        )
+                    }.getOrNull() ?: "sin pantalla"
+                    sendText(out, 200, "application/json",
+                        """{"resultado":${org.json.JSONObject.quote(res)}}""")
+                }
+                "/armar-pin" -> {
+                    val pin = consulta["pin"] ?: "1234"
+                    runCatching { EstadoActual.armarPin?.invoke(pin) }
+                    sendText(out, 200, "application/json",
+                        """{"pinArmado":${org.json.JSONObject.quote(pin)}}""")
+                }
+                "/confirmador" -> sendText(out, 200, "text/plain",
+                    EstadoActual.loQueDiceElConfirmador().joinToString(SALTO))
                 "/" -> sendText(out, 200, "text/plain", HELP)
                 else -> sendText(out, 404, "text/plain", "no existe: $path")
             }
@@ -218,6 +235,7 @@ class DebugServer(
             // que el ultimo estado bueno pase por actual.
             put("pantallaViva", viewProvider() != null)
             put("adaptador", EstadoActual.adaptadorElegido ?: JSONObject.NULL)
+            put("ultimoErrorEnlace", EstadoActual.ultimoErrorEnlace ?: JSONObject.NULL)
             put("protocol", s.protocol ?: JSONObject.NULL)
             put("rpm", s.rpm ?: JSONObject.NULL)
             put("speedKmh", s.speedKmh ?: JSONObject.NULL)
@@ -296,6 +314,8 @@ class DebugServer(
     private companion object {
         const val TAG = "DebugServer"
         const val PORT = 8099
+        /** Salto de linea, aparte para no romper el literal. */
+        val SALTO = System.lineSeparator()
         const val REINTENTOS_BIND = 10
         const val MAX_LINEA = 4_096
         const val MAX_CABECERAS = 64

@@ -24,6 +24,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.nonosky.s2000dash.bt.ObdPairing
+import com.nonosky.s2000dash.selfupdate.ApkVerifier
+import com.nonosky.s2000dash.selfupdate.AutoInstaller
 import com.nonosky.s2000dash.selfupdate.UpdateChecker
 import com.nonosky.s2000dash.obd.PollScheduler
 import com.nonosky.s2000dash.obd.SppTransport
@@ -100,6 +102,8 @@ class DashActivity : ComponentActivity() {
         EstadoActual.buscarAdaptadores = { barrerBloqueando() }
         EstadoActual.emparejarAdaptador = { mac -> emparejarBloqueando(mac) }
         EstadoActual.olvidarAdaptador = { olvidar() }
+        EstadoActual.instalarCompanero = { url, paquete -> instalarCompanero(url, paquete) }
+        EstadoActual.armarPin = { pin -> AutoInstaller.armarPin(applicationContext, pin) }
 
         DashService.arrancar(this)
 
@@ -205,6 +209,8 @@ class DashActivity : ComponentActivity() {
         EstadoActual.buscarAdaptadores = null
         EstadoActual.emparejarAdaptador = null
         EstadoActual.olvidarAdaptador = null
+        EstadoActual.instalarCompanero = null
+        EstadoActual.armarPin = null
         // Soltar la vista para que no la retenga el servicio. El puente
         // seguira contestando el estado; solo dejara de haber captura, que
         // es la verdad: sin pantalla no hay nada que fotografiar.
@@ -319,8 +325,22 @@ class DashActivity : ComponentActivity() {
                     devices.forEach { d ->
                         val marca = if (ObdPairing.looksLikeObd(d)) " [OBD?]" else ""
                         val emp = if (d.bondState == BluetoothDevice.BOND_BONDED) " (emparejado)" else ""
+                        // El tipo decide TODO: un adaptador BLE no habla
+                        // SPP/RFCOMM y ningun createBond clasico va a
+                        // funcionar con el. Era el riesgo R1 del diseño y
+                        // nunca se habia podido confirmar.
+                        val tipo = when (runCatching { d.type }.getOrNull()) {
+                            BluetoothDevice.DEVICE_TYPE_CLASSIC -> "CLASICO"
+                            BluetoothDevice.DEVICE_TYPE_LE -> "BLE"
+                            BluetoothDevice.DEVICE_TYPE_DUAL -> "DUAL"
+                            else -> "DESCONOCIDO"
+                        }
+                        val uuids = runCatching {
+                            d.uuids?.joinToString(",") { it.uuid.toString().take(8) } ?: "-"
+                        }.getOrNull() ?: "-"
                         encontrados[d.address] =
-                            "${d.address}  ${runCatching { d.name }.getOrNull() ?: "?"}$marca$emp"
+                            "${d.address}  ${runCatching { d.name }.getOrNull() ?: "?"}" +
+                            "$marca$emp  tipo=$tipo  uuids=$uuids"
                     }
                 }
                 override fun onBonded(device: BluetoothDevice) = Unit
@@ -373,6 +393,47 @@ class DashActivity : ComponentActivity() {
             return "emparejado${if (elegido) " y elegido" else ", fallo al elegir"} :: $traza"
         }
         return "${salida.get()} (bondState=$estadoFinal) :: $traza"
+    }
+
+    /**
+     * Descarga un APK acompanante, comprueba que lleva NUESTRA firma, y lo
+     * instala armando antes al confirmador para que se acepte solo.
+     *
+     * Existe para poder actualizar el confirmador sin ir al carro: es el
+     * unico APK que no se auto-actualiza, y justo por eso se quedaba viejo.
+     */
+    private fun instalarCompanero(url: String, paquete: String): String {
+        if (url.isBlank() || paquete.isBlank()) return "faltan url o paquete"
+        val destino = java.io.File(filesDir, "companero.apk")
+        return try {
+            val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 8_000
+                readTimeout = 30_000
+                useCaches = false
+            }
+            try {
+                if (conn.responseCode != 200) return "HTTP ${conn.responseCode}"
+                destino.outputStream().use { o -> conn.inputStream.use { it.copyTo(o) } }
+            } finally {
+                conn.disconnect()
+            }
+
+            when (val v = ApkVerifier.verifyCompanion(applicationContext, destino, paquete)) {
+                is ApkVerifier.Result.Rechazado -> {
+                    destino.delete()
+                    return "RECHAZADO: ${v.motivo}"
+                }
+                ApkVerifier.Result.Ok -> Unit
+            }
+
+            // Armar el confirmador ACTUAL para que acepte la instalacion del
+            // confirmador NUEVO. Se reemplaza a si mismo.
+            AutoInstaller.armarConfirmador(applicationContext, -1)
+            val ok = AutoInstaller.install(applicationContext, destino)
+            if (ok) "instalacion lanzada (${destino.length()} bytes)" else "no se pudo lanzar"
+        } catch (e: Exception) {
+            "error: ${e.message}"
+        }
     }
 
     /** Olvida el adaptador: util cuando se guardo el equivocado. */

@@ -24,7 +24,14 @@ class ArmarReceiver : BroadcastReceiver() {
             }
             ACCION_DESARMAR -> {
                 Armado.desarmar()
+                Armado.desarmarPin()
                 Log.i(TAG, "Desarmado")
+            }
+            ACCION_ARMAR_PIN -> {
+                val pin = intent.getStringExtra(EXTRA_PIN) ?: return
+                val duracion = intent.getLongExtra(EXTRA_DURACION, 90_000L)
+                Armado.armarPin(pin, duracion)
+                Log.i(TAG, "PIN armado durante $duracion ms")
             }
         }
     }
@@ -33,6 +40,8 @@ class ArmarReceiver : BroadcastReceiver() {
         private const val TAG = "ArmarReceiver"
         const val ACCION_ARMAR = "com.nonosky.s2000dash.ARMAR_INSTALACION"
         const val ACCION_DESARMAR = "com.nonosky.s2000dash.DESARMAR_INSTALACION"
+        const val ACCION_ARMAR_PIN = "com.nonosky.s2000dash.ARMAR_PIN"
+        const val EXTRA_PIN = "pin"
         const val EXTRA_VERSION = "versionCode"
         const val EXTRA_DURACION = "duracionMs"
     }

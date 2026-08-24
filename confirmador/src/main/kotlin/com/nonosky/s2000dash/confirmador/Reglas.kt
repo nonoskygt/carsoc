@@ -37,6 +37,35 @@ object Reglas {
         "acceso a", "access to",
     )
 
+    /** Paquetes donde vive el dialogo de emparejamiento Bluetooth. */
+    private val DIALOGOS_BT = listOf(
+        "com.android.settings",
+        "com.android.bluetooth",
+        "com.android.systemui",
+    )
+
+    fun esDialogoBluetooth(pkg: String?): Boolean {
+        val p = pkg?.lowercase() ?: return false
+        return DIALOGOS_BT.any { p == it || p.startsWith("$it.") }
+    }
+
+    /** Botones que aceptan un emparejamiento. */
+    private val EMPAREJA = setOf(
+        "emparejar", "pair", "vincular", "aceptar", "ok", "conectar", "connect",
+    )
+
+    fun esBotonDeEmparejar(etiqueta: String?): Boolean {
+        val n = normalizar(etiqueta) ?: return false
+        // Aqui SI vale "aceptar"/"ok": el dialogo de emparejamiento los usa
+        // como confirmacion. La lista de instalacion sigue siendo estricta.
+        if (n in NUNCA_BT) return false
+        return n in EMPAREJA
+    }
+
+    private val NUNCA_BT = setOf(
+        "cancelar", "cancel", "rechazar", "deny", "denegar", "atras", "back",
+    )
+
     fun esInstalador(pkg: String?): Boolean {
         val p = pkg?.lowercase() ?: return false
         return INSTALADORES.any { p.contains(it) }

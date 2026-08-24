@@ -23,7 +23,22 @@ class ConfirmarInstalacionService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (!Reglas.esInstalador(event.packageName?.toString())) return
+        val pkg = event.packageName?.toString()
+
+        // El dialogo de emparejamiento Bluetooth va antes: la ROM de este
+        // radio lo muestra pero no deja escribir en el, asi que sin esto el
+        // emparejamiento muere de tiempo y no hay forma de conectar el
+        // adaptador OBD.
+        //
+        // No se filtra por paquete: en esta ROM el dialogo no vive en
+        // ninguno de los de AOSP. Lo que acota el alcance es la ventana de
+        // armado, que dura segundos y la abre el tablero.
+        if (Armado.pinActivo()) {
+            reportar("ventana: $pkg")
+            if (rellenarPin()) return
+        }
+
+        if (!Reglas.esInstalador(pkg)) return
         // Sin ventana armada por el tablero no se toca nada, diga lo que
         // diga la pantalla.
         if (!Armado.activo()) return
@@ -45,6 +60,102 @@ class ConfirmarInstalacionService : AccessibilityService() {
             Log.w(TAG, "Fallo revisando la ventana: ${e.message}")
         } finally {
             runCatching { root.recycle() }
+        }
+    }
+
+    /**
+     * Escribe el PIN en el dialogo de emparejamiento y acepta.
+     *
+     * @return true si se pudo teclear y confirmar.
+     */
+    private fun rellenarPin(): Boolean {
+        val pin = Armado.pin ?: return false
+        val root = rootInActiveWindow ?: return false
+        try {
+            val campo = buscarCampoTexto(root)
+            if (campo == null) {
+                reportar("sin campo de texto editable en esta ventana")
+                return false
+            }
+            val args = android.os.Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pin
+                )
+            }
+            if (!campo.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                Log.w(TAG, "No se pudo escribir el PIN")
+                return false
+            }
+            Log.i(TAG, "PIN escrito; buscando el boton de aceptar")
+
+            // El boton suele habilitarse solo al haber texto, asi que se
+            // vuelve a leer la ventana en vez de reutilizar el arbol viejo.
+            val fresco = rootInActiveWindow ?: root
+            val pulsado = pulsarBotonEmparejar(fresco)
+            if (pulsado != null) {
+                Log.i(TAG, "Emparejamiento confirmado con '$pulsado'")
+                reportar("PIN escrito y confirmado con '$pulsado'")
+                Armado.desarmarPin()
+                return true
+            }
+            reportar("PIN escrito pero no se hallo boton de emparejar")
+            return false
+        } catch (e: Exception) {
+            Log.w(TAG, "Fallo rellenando el PIN: ${e.message}")
+            return false
+        } finally {
+            runCatching { root.recycle() }
+        }
+    }
+
+    private fun buscarCampoTexto(nodo: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        nodo ?: return null
+        if (nodo.isEditable && nodo.isEnabled) return nodo
+        for (i in 0 until nodo.childCount) {
+            val hijo = nodo.getChild(i) ?: continue
+            val encontrado = buscarCampoTexto(hijo)
+            if (encontrado != null) return encontrado
+            runCatching { hijo.recycle() }
+        }
+        return null
+    }
+
+    private fun pulsarBotonEmparejar(nodo: AccessibilityNodeInfo?): String? {
+        nodo ?: return null
+        val txt = (nodo.text?.toString() ?: "").trim()
+        val desc = (nodo.contentDescription?.toString() ?: "").trim()
+        val etiqueta = if (txt.isNotEmpty()) txt else desc
+
+        if (etiqueta.isNotEmpty() && nodo.isClickable && nodo.isEnabled &&
+            Reglas.esBotonDeEmparejar(etiqueta)
+        ) {
+            if (nodo.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return etiqueta
+        }
+        for (i in 0 until nodo.childCount) {
+            val hijo = nodo.getChild(i) ?: continue
+            try {
+                pulsarBotonEmparejar(hijo)?.let { return it }
+            } finally {
+                runCatching { hijo.recycle() }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Cuenta al tablero lo que ve.
+     *
+     * Sin esto, depurar el confirmador es imposible: no tiene pantalla, sus
+     * logs no se pueden leer sin root, y el unico sintoma es que no pasa
+     * nada.
+     */
+    private fun reportar(t: String) {
+        runCatching {
+            sendBroadcast(
+                android.content.Intent("com.nonosky.s2000dash.CONFIRMADOR_DICE")
+                    .setPackage("com.nonosky.s2000dash")
+                    .putExtra("texto", t)
+            )
         }
     }
 

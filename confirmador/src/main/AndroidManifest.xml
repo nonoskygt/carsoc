@@ -10,6 +10,14 @@
         android:name="com.nonosky.s2000dash.permission.ARMAR"
         android:protectionLevel="signature" />
 
+    <!-- Para contarle al tablero lo que se ve en pantalla. Nivel
+         "signature": solo funciona entre APK con el mismo certificado. -->
+    <uses-permission android:name="com.nonosky.s2000dash.permission.ARMAR" />
+
+    <queries>
+        <package android:name="com.nonosky.s2000dash" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@android:drawable/ic_lock_idle_lock"
@@ -34,6 +42,7 @@
             <intent-filter>
                 <action android:name="com.nonosky.s2000dash.ARMAR_INSTALACION" />
                 <action android:name="com.nonosky.s2000dash.DESARMAR_INSTALACION" />
+                <action android:name="com.nonosky.s2000dash.ARMAR_PIN" />
             </intent-filter>
         </receiver>
 

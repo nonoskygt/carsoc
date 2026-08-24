@@ -45,6 +45,17 @@ object AutoInstaller {
             .onFailure { Log.w(TAG, "No se pudo armar el confirmador: ${it.message}") }
     }
 
+    /** Arma el confirmador para que teclee el PIN del adaptador OBD. */
+    fun armarPin(context: Context, pin: String, duracionMs: Long = 90_000L) {
+        val intent = Intent("com.nonosky.s2000dash.ARMAR_PIN").apply {
+            setPackage(CONFIRMADOR)
+            putExtra("pin", pin)
+            putExtra("duracionMs", duracionMs)
+        }
+        runCatching { context.sendBroadcast(intent) }
+            .onFailure { Log.w(TAG, "No se pudo armar el PIN: ${it.message}") }
+    }
+
     /** Si es false hay que mandar al usuario a "instalar apps desconocidas". */
     fun canInstall(context: Context): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

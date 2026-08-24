@@ -24,6 +24,15 @@ object EstadoActual {
     var adaptadorElegido: String? = null
 
     /**
+     * Ultimo fallo del enlace, con su causa.
+     *
+     * Un tablero que solo dice "conectando" no permite diagnosticar
+     * nada en remoto: hay que saber SI fallo y POR QUE.
+     */
+    @Volatile
+    var ultimoErrorEnlace: String? = null
+
+    /**
      * Lista los adaptadores Bluetooth que el radio ya tiene emparejados.
      *
      * Lo pone la pantalla, que es quien tiene los permisos. Sirve para
@@ -54,6 +63,24 @@ object EstadoActual {
     /** Olvida el adaptador guardado y detiene el sondeo. */
     @Volatile
     var olvidarAdaptador: (() -> Unit)? = null
+
+    /** Descarga, verifica la firma e instala un APK acompanante. */
+    @Volatile
+    var instalarCompanero: ((String, String) -> String)? = null
+
+    /** Arma el confirmador para que teclee el PIN del emparejamiento. */
+    @Volatile
+    var armarPin: ((String) -> Unit)? = null
+
+    /** Lo ultimo que conto el confirmador sobre lo que ve en pantalla. */
+    private val dichos = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+    fun anotarConfirmador(t: String) {
+        if (dichos.size > 40) dichos.removeAt(0)
+        dichos.add(t)
+    }
+
+    fun loQueDiceElConfirmador(): List<String> = dichos.toList()
 
     /**
      * Referencia debil a la vista del tablero, para poder fotografiarla.
