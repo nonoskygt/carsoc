@@ -91,6 +91,60 @@ object EstadoActual {
     var listarUsb: (() -> List<String>)? = null
 
     /**
+     * El lector del TPMS, vivo mientras viva el servicio.
+     *
+     * Lo expone el servicio y lo consultan la pantalla y el puente. Va aqui y
+     * no en la Activity porque las llantas deben seguir midiendose con el
+     * tablero cerrado: si colgara de la pantalla, cambiar de app dejaria de
+     * vigilar las presiones — justo cuando el carro esta andando.
+     */
+    @Volatile
+    var lectorTpms: com.nonosky.s2000dash.tpms.TpmsReader? = null
+
+    /**
+     * El vigilante de la bateria de litio, que barre BLE por el dongle USB.
+     *
+     * No usa la pila Bluetooth del radio porque esa no sirve: le habla HCI
+     * directo al dongle. Vive en el servicio por lo mismo que el TPMS — hay
+     * que seguir vigilando con el tablero cerrado.
+     */
+    @Volatile
+    var vigilanteBateria: com.nonosky.s2000dash.bateria.VigilanteBateria? = null
+
+    /** La pantalla se registra aqui para repintar cuando cambia la bateria. */
+    @Volatile
+    var alCambiarBateria: (() -> Unit)? = null
+
+    /** La pantalla se registra aqui para repintar cuando llega una trama. */
+    @Volatile
+    var alCambiarTpms: (() -> Unit)? = null
+
+    /**
+     * Interroga por HCI crudo a un dongle Bluetooth USB, sin el kernel.
+     *
+     * Hace falta porque el kernel de esta ROM no trae `btusb`
+     * (`/sys/class/bluetooth/` esta vacio) y el dongle quedo enganchado al
+     * driver USB generico: Android jamas lo va a usar como su radio. Pero si
+     * nos concede permiso sobre el aparato USB, y un dongle Bluetooth es un
+     * transporte HCI simple: comandos por control, eventos por interrupcion.
+     */
+    @Volatile
+    var interrogarHci: ((Int?, Int?) -> List<String>)? = null
+
+    /** Barrido BLE hablandole al dongle por HCI, saltandose la pila rota. */
+    @Volatile
+    var barrerBleHci: ((Int, Int?, Int?, Boolean, Boolean) -> List<String>)? = null
+
+    /**
+     * Abre el USB-serial y vuelca lo que llegue, en crudo.
+     *
+     * El formato de trama del receptor TPMS es propietario: hay que ver bytes
+     * reales antes de escribir un decodificador, no al reves.
+     */
+    @Volatile
+    var volcarUsbSerial: ((Int, Int) -> List<String>)? = null
+
+    /**
      * Enciende o apaga la radio Bluetooth del head unit.
      *
      * No es un lujo: tras reiniciar el carro queda apagada, y se ha visto

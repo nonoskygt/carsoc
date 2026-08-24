@@ -95,6 +95,24 @@ class DashActivity : ComponentActivity() {
         // cuando mas falta hacia.
         EstadoActual.vista = dashView
 
+        // El TPMS empuja: el lector avisa cuando llega una trama y la vista
+        // recoge el estado del servicio. Se hace asi, y no sondeando, porque
+        // las tramas llegan cuando llegan y un sondeo o llega tarde o gasta
+        // CPU preguntando por nada.
+        EstadoActual.alCambiarTpms = {
+            runOnUiThread {
+                EstadoActual.lectorTpms?.let { dashView.setTpms(it.estado(), it.enlace) }
+
+        EstadoActual.alCambiarBateria = {
+            runOnUiThread {
+                EstadoActual.vigilanteBateria?.let { dashView.setBateria(it.estado) }
+            }
+        }
+        EstadoActual.vigilanteBateria?.let { dashView.setBateria(it.estado) }
+            }
+        }
+        EstadoActual.lectorTpms?.let { dashView.setTpms(it.estado(), it.enlace) }
+
         // Ganchos para poder configurar el adaptador en remoto por el
         // puente, sin ir al carro a tocar el selector.
         EstadoActual.listarAdaptadores = { adaptadoresEmparejados() }

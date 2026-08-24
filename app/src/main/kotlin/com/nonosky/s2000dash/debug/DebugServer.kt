@@ -209,6 +209,57 @@ class DebugServer(
                         .getOrNull() ?: listOf("ERROR: el servicio no registro el listado USB")
                     sendText(out, 200, "text/plain", lista.joinToString(SALTO))
                 }
+                "/tpms" -> sendText(out, 200, "text/plain", tpmsTexto())
+                "/bateria" -> {
+                    val v = EstadoActual.vigilanteBateria
+                    if (v == null) sendText(out, 200, "text/plain", "el servicio no arranco el vigilante")
+                    else {
+                        val b = v.estado
+                        sendText(out, 200, "application/json", JSONObject().apply {
+                            put("enlace", b.enlace.name)
+                            put("detalle", b.detalle ?: JSONObject.NULL)
+                            put("mac", b.mac ?: JSONObject.NULL)
+                            put("nombre", b.nombre ?: JSONObject.NULL)
+                            put("rssi", b.rssi ?: JSONObject.NULL)
+                            put("vistaHaceMs", if (b.vistaMs == 0L) JSONObject.NULL
+                                else System.currentTimeMillis() - b.vistaMs)
+                            put("voltaje", b.voltaje?.toDouble() ?: JSONObject.NULL)
+                            put("soc", b.soc ?: JSONObject.NULL)
+                        }.toString(2))
+                    }
+                }
+                "/serial" -> {
+                    // Vuelca lo que escupa el USB-serial, sin decodificar. La
+                    // velocidad VERIFICADA en vivo del receptor TPMS es 19200;
+                    // por eso es el valor por defecto y no 9600, que devolvia
+                    // bytes con bits sueltos y parecia un formato raro.
+                    val baudios = consulta["baudios"]?.toIntOrNull() ?: 19200
+                    val seg = consulta["segundos"]?.toIntOrNull() ?: 8
+                    val lista = runCatching { EstadoActual.volcarUsbSerial?.invoke(baudios, seg) }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro el volcado serial")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/hci" -> {
+                    // Le habla HCI al dongle USB directamente: la pila del
+                    // radio no sirve y el kernel no trae btusb, pero Android
+                    // si nos da permiso sobre el aparato USB.
+                    val vid = consulta["vid"]?.removePrefix("0x")?.toIntOrNull(16)
+                    val pid = consulta["pid"]?.removePrefix("0x")?.toIntOrNull(16)
+                    val lista = runCatching { EstadoActual.interrogarHci?.invoke(vid, pid) }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro la sonda HCI")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/hci-ble" -> {
+                    val seg = consulta["segundos"]?.toIntOrNull() ?: 12
+                    val vid = consulta["vid"]?.removePrefix("0x")?.toIntOrNull(16)
+                    val pid = consulta["pid"]?.removePrefix("0x")?.toIntOrNull(16)
+                    val activo = consulta["activo"] == "1"
+                    val crudo = consulta["crudo"] == "1"
+                    val lista = runCatching {
+                        EstadoActual.barrerBleHci?.invoke(seg, vid, pid, activo, crudo)
+                    }.getOrNull() ?: listOf("ERROR: el servicio no registro el barrido HCI")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
                 "/bluetooth" -> {
                     // Se ha visto la pila de este radio apagarse sola tras
                     // varios emparejamientos fallidos. Sin esta ruta, cada vez
@@ -224,6 +275,55 @@ class DebugServer(
             }
             out.flush()
         }
+    }
+
+    /**
+     * Lo que el TPMS sabe, con sus contadores de calidad.
+     *
+     * Los contadores importan tanto como las presiones: un XOR que falla
+     * seguido significa velocidad mal puesta o cable con ruido, y sin verlos
+     * un tablero en blanco parece un receptor muerto cuando en realidad se
+     * esta descartando todo por una razon corregible.
+     */
+    private fun tpmsTexto(): String {
+        val lector = EstadoActual.lectorTpms
+            ?: return "el servicio no arranco el lector TPMS"
+        val ahora = System.currentTimeMillis()
+        val st = lector.estado()
+        val d = lector.diagnostico()
+        val sb = StringBuilder()
+        sb.append("enlace: ").append(lector.enlace)
+        lector.enlaceDetalle?.let { sb.append(" (").append(it).append(")") }
+        sb.append(SALTO).append("reaperturas: ").append(lector.reaperturas)
+        sb.append(SALTO).append(SALTO)
+        for (r in com.nonosky.s2000dash.tpms.Rueda.values()) {
+            val l = st.de(r)
+            sb.append(r.corta).append(": ")
+            if (l == null) {
+                sb.append("sin sensor")
+            } else {
+                sb.append(l.presionPsi?.let { String.format("%.1f psi", it) } ?: "-- psi")
+                sb.append("  ").append(l.temperaturaC?.let { "$it C" } ?: "-- C")
+                sb.append("  edad=").append((ahora - l.medidaMs) / 1000).append("s")
+                if (l.rancia(ahora)) sb.append("  RANCIA")
+                sb.append("  crudo=").append(
+                    String.format("%02X %02X %02X", l.trama.crudoA, l.trama.crudoB, l.trama.crudoC)
+                )
+            }
+            sb.append(SALTO)
+        }
+        if (st.otras.isNotEmpty()) {
+            sb.append(SALTO).append("ids que no son de rueda:").append(SALTO)
+            st.otras.forEach { (id, t) ->
+                sb.append(String.format("  id=%02X  %02X %02X %02X", id, t.crudoA, t.crudoB, t.crudoC))
+                sb.append(SALTO)
+            }
+        }
+        sb.append(SALTO).append("tramas buenas=").append(d.tramasBuenas)
+        sb.append("  xor malo=").append(d.tramasXorMalo)
+        sb.append("  largo raro=").append(d.tramasLargoRaro)
+        sb.append("  bytes tirados=").append(d.bytesDescartados)
+        return sb.toString()
     }
 
     /**
@@ -366,6 +466,11 @@ class DebugServer(
               /ble?segundos=10 barrido Bluetooth LE con el anuncio crudo
               /gatt?mac=       servicios y caracteristicas de un aparato BLE
               /usb             lo que hay colgado del USB (VID, PID, endpoints)
+              /tpms            presiones y temperaturas de las cuatro llantas
+              /bateria         estado del BMS de litio por BLE
+              /serial?baudios=19200&segundos=8  vuelca el USB-serial en crudo
+              /hci?vid=&pid=   interroga por HCI al dongle Bluetooth USB
+              /hci-ble?segundos=12&activo=1&crudo=1  barrido BLE por HCI crudo
         """.trimIndent()
     }
 }

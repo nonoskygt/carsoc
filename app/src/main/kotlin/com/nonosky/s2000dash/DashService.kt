@@ -10,8 +10,11 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import com.nonosky.s2000dash.bateria.VigilanteBateria
 import com.nonosky.s2000dash.debug.DebugServer
 import com.nonosky.s2000dash.descubrimiento.Descubridor
+import com.nonosky.s2000dash.hci.SondaHci
+import com.nonosky.s2000dash.tpms.TpmsReader
 import com.nonosky.s2000dash.selfupdate.UpdateChecker
 import kotlin.concurrent.thread
 
@@ -28,6 +31,8 @@ import kotlin.concurrent.thread
 class DashService : Service() {
 
     private var puente: DebugServer? = null
+    private var lectorTpms: TpmsReader? = null
+    private var vigilante: VigilanteBateria? = null
     private val actualizador by lazy { UpdateChecker(applicationContext) }
 
     @Volatile
@@ -46,6 +51,9 @@ class DashService : Service() {
         ).also { it.start() }
 
         registrarDescubrimiento()
+
+        arrancarTpms()
+        arrancarBateria()
 
         vivo = true
         arrancarRevisionPeriodica()
@@ -77,9 +85,50 @@ class DashService : Service() {
         EstadoActual.listarUsb = {
             Descubridor.listarUsb(ctx)
         }
+        EstadoActual.volcarUsbSerial = { baudios, segundos ->
+            Descubridor.volcarUsbSerial(ctx, baudios, segundos)
+        }
+        EstadoActual.interrogarHci = { vid, pid ->
+            SondaHci.interrogar(ctx, vid, pid)
+        }
+        EstadoActual.barrerBleHci = { segundos, vid, pid, activo, crudo ->
+            SondaHci.barrerBle(ctx, segundos, vid, pid, activo, crudo)
+        }
         EstadoActual.encenderBluetooth = { encender ->
             Descubridor.encenderBluetooth(adapter, encender)
         }
+    }
+
+    /**
+     * Arranca la lectura del TPMS en su propio hilo.
+     *
+     * Envuelto entero: si el receptor no esta, o el USB falla, el tablero
+     * tiene que seguir en pie. Antes TODO colgaba del enlace OBD y sin
+     * adaptador no habia nada en pantalla; repetir ese error con el TPMS
+     * seria no haber aprendido nada.
+     */
+    private fun arrancarTpms() {
+        runCatching {
+            val lector = TpmsReader(applicationContext)
+            lectorTpms = lector
+            EstadoActual.lectorTpms = lector
+            lector.alCambiar = { runCatching { EstadoActual.alCambiarTpms?.invoke() } }
+            lector.arrancar()
+        }.onFailure { Log.w(TAG, "TPMS no arranco: ${it.message}") }
+    }
+
+    /**
+     * Arranca la vigilancia de la bateria. Envuelto, como todo lo demas: si
+     * el dongle no esta, el resto del tablero sigue en pie.
+     */
+    private fun arrancarBateria() {
+        runCatching {
+            val v = VigilanteBateria(applicationContext)
+            vigilante = v
+            EstadoActual.vigilanteBateria = v
+            v.alCambiar = { runCatching { EstadoActual.alCambiarBateria?.invoke() } }
+            v.arrancar()
+        }.onFailure { Log.w(TAG, "vigilante de bateria no arranco: ${it.message}") }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -90,6 +139,12 @@ class DashService : Service() {
 
     override fun onDestroy() {
         vivo = false
+        runCatching { vigilante?.detener() }
+        vigilante = null
+        EstadoActual.vigilanteBateria = null
+        runCatching { lectorTpms?.detener() }
+        lectorTpms = null
+        EstadoActual.lectorTpms = null
         puente?.stop()
         puente = null
         Log.i(TAG, "Servicio abajo")

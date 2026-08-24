@@ -15,6 +15,7 @@ import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.location.LocationManager
+import com.nonosky.s2000dash.tpms.Ch340
 import android.os.Build
 import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
@@ -393,6 +394,62 @@ object Descubridor {
         UsbConstants.USB_ENDPOINT_XFER_CONTROL -> "CONTROL"
         else -> "tipo($t)"
     }
+
+    /**
+     * Abre el USB-serial a [baudios] y vuelca lo que llegue, en hex y en
+     * ASCII imprimible a la vez.
+     *
+     * Dos vistas del mismo dato a proposito: hay receptores TPMS que hablan
+     * en texto y otros en binario con cabecera y checksum. Verlas juntas
+     * ahorra un despliegue entero.
+     *
+     * Si no llega nada casi siempre es la velocidad equivocada, y el mensaje
+     * lo dice y sugiere las otras en vez de dejar un vacio mudo.
+     */
+    fun volcarUsbSerial(context: Context, baudios: Int, segundos: Int): List<String> {
+        val um = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+            ?: return listOf("ERROR: este radio no expone UsbManager")
+
+        val device = runCatching { um.deviceList.values }.getOrNull()
+            ?.firstOrNull { esSerial(it.vendorId) }
+            ?: return listOf("ERROR: no encuentro ningun USB-serial conectado")
+
+        val ch = Ch340(um, device)
+        val salida = mutableListOf<String>()
+        salida += "aparato VID=0x" + String.format("%04X", device.vendorId) +
+            " PID=0x" + String.format("%04X", device.productId) + " a " + baudios + " baudios"
+
+        return try {
+            val traza = ch.abrir(baudios)
+            salida += traza
+            if (traza.any { it.startsWith("ERROR") }) return salida
+
+            val datos = ch.leerCrudo(segundos * 1000L)
+            if (datos.isEmpty()) {
+                salida += "Nada llego en " + segundos + "s a " + baudios + " baudios."
+                salida += "Lo mas probable es que sea otra velocidad. Prueba: " +
+                    Ch340.VELOCIDADES_TIPICAS.filter { it != baudios }.joinToString(", ")
+                return salida
+            }
+
+            salida += "--- " + datos.size + " bytes ---"
+            salida += "HEX:   " + datos.joinToString("") { String.format("%02X", it) }
+            salida += "ASCII: " + datos.map { b ->
+                val c = b.toInt() and 0xFF
+                if (c in 32..126) c.toChar() else 46.toChar()
+            }.joinToString("")
+            salida
+        } catch (e: Exception) {
+            salida += "ERROR: " + e.javaClass.simpleName + ": " + e.message
+            salida
+        } finally {
+            runCatching { ch.cerrar() }
+        }
+    }
+
+    /** Los VID de los USB-serial baratos mas comunes. */
+    private fun esSerial(vid: Int): Boolean =
+        vid == 0x1A86 || vid == 0x10C4 || vid == 0x0403 || vid == 0x067B
 
     // --- Bluetooth: encender ------------------------------------------------
 

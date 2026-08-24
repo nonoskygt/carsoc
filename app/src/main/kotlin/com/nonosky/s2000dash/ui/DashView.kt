@@ -11,10 +11,12 @@ import android.view.View
 import com.nonosky.s2000dash.ConnectionState
 import com.nonosky.s2000dash.EngineConstants
 import com.nonosky.s2000dash.VehicleState
-import kotlin.math.cos
-import kotlin.math.exp
-import kotlin.math.min
-import kotlin.math.sin
+import com.nonosky.s2000dash.bateria.BateriaState
+import com.nonosky.s2000dash.bateria.EnlaceBateria
+import com.nonosky.s2000dash.tpms.EnlaceTpms
+import com.nonosky.s2000dash.tpms.Escalas
+import com.nonosky.s2000dash.tpms.EstadoTpms
+import com.nonosky.s2000dash.tpms.Rueda
 
 /**
  * El tablero entero, dibujado a mano en un [Canvas].
@@ -22,7 +24,17 @@ import kotlin.math.sin
  * Canvas y no Compose por decision de diseño (§4): el head unit trae una CPU
  * debil (Rockchip rk3326) y esto tiene que sostener 60 fps sin pelear.
  *
- * No conoce Bluetooth ni OBD: recibe un [VehicleState] y lo pinta.
+ * **Sin tacometro y sin velocimetro, por peticion expresa del dueño.** El
+ * carro ya tiene los dos en el cuadro original a la altura de los ojos;
+ * repetirlos aqui gastaba el 70% de la pantalla en informacion duplicada. Lo
+ * que este tablero aporta es lo que el carro NO muestra: las cuatro presiones
+ * y las temperaturas del motor.
+ *
+ * Eso cambia el criterio de diseño. Un tacometro se mira constantemente; una
+ * presion de llanta no se mira nunca — hasta que importa. Asi que los numeros
+ * viven tranquilos y **gritan al salirse de rango**, que es cuando sirven.
+ *
+ * No conoce Bluetooth ni OBD ni USB: recibe estado y lo pinta.
  */
 class DashView @JvmOverloads constructor(
     context: Context,
@@ -33,30 +45,25 @@ class DashView @JvmOverloads constructor(
     // --- Estado -------------------------------------------------------------
 
     private var state = VehicleState()
-
-    /** Valor suavizado que realmente se dibuja. Ver §8: la aguja no salta. */
-    private var displayedRpm = 0f
-    private var lastFrameNs = 0L
+    private var tpms = EstadoTpms()
+    private var enlaceTpms: EnlaceTpms = EnlaceTpms.SinReceptor
+    private var bateria = BateriaState()
 
     fun setState(newState: VehicleState) {
         state = newState
-        // No invalidamos aqui: el bucle de animacion ya corre a 60 fps y
-        // repintar dos veces por muestra solo gasta CPU.
+    }
+
+    fun setTpms(nuevo: EstadoTpms, enlace: EnlaceTpms) {
+        tpms = nuevo
+        enlaceTpms = enlace
+    }
+
+    fun setBateria(nuevo: BateriaState) {
+        bateria = nuevo
     }
 
     // --- Pinceles (asignados una sola vez; onDraw no aloca) -----------------
 
-    private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.BUTT
-    }
-    private val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-    }
-    private val needlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
@@ -66,350 +73,381 @@ class DashView @JvmOverloads constructor(
         textAlign = Paint.Align.CENTER
     }
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val trazoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
 
-    private val dialRect = RectF()
-
-    /** Reutilizado cada frame: `onDraw` no debe alocar en una CPU debil. */
-    private val needlePath = android.graphics.Path()
-
-    // --- Geometria del tacometro -------------------------------------------
-
-    /** Barrido clasico: empieza abajo-izquierda y termina abajo-derecha. */
-    private val startAngleDeg = 150f
-    private val sweepDeg = 240f
+    private val caja = RectF()
 
     // --- Bucle de animacion -------------------------------------------------
 
+    /**
+     * Se sigue repintando en bucle aunque ya no haya aguja que animar: el
+     * parpadeo de una presion en alarma y el paso de un dato a "rancio"
+     * ocurren con el tiempo, no con la llegada de datos. Sin bucle, una
+     * llanta se quedaria pintada como fresca para siempre.
+     */
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        lastFrameNs = 0L
         postInvalidateOnAnimation()
     }
 
     override fun onDraw(canvas: Canvas) {
-        val nowNs = System.nanoTime()
-        val dtMs = if (lastFrameNs == 0L) 16f else (nowNs - lastFrameNs) / 1_000_000f
-        lastFrameNs = nowNs
-        advanceNeedle(dtMs)
-
         val w = width.toFloat()
         val h = height.toFloat()
+        val ahora = System.currentTimeMillis()
         canvas.drawColor(COLOR_BG)
 
-        // Tres columnas. La pantalla del radio es una barra de 2.67:1, asi
-        // que apilar todo a la derecha del tacometro dejaba media pantalla
-        // vacia y amontonaba la velocidad con la temperatura. Repartido en
-        // columnas cada dato tiene su sitio y se lee de un vistazo.
+        // TRES columnas iguales, como las pidio el dueño:
         //
-        //   [ tacometro ] [   velocidad   ] [ agua / aire / carga / bateria ]
+        //   [ MOTOR / OBD2 ] [ BATERIA + LLANTAS ] [ libre ]
         //
-        // Las proporciones son relativas al viewport: el mismo codigo sirve
-        // para 800x480 o 1024x600 sin tocar nada.
-        val dialSize = min(h * 0.98f, w * 0.38f)
-        val cx = dialSize * 0.50f
-        val cy = h * 0.5f
-        val radius = dialSize * 0.45f
+        // La tercera queda a proposito vacia, reservada. Se marca como libre
+        // en vez de estirar las otras dos para taparla: si mañana entra un
+        // dato nuevo, el sitio ya esta y nada se mueve de donde el ojo
+        // aprendio a buscarlo.
+        val col = w / 3f
+        dibujarMotor(canvas, 0f, col, h, ahora)
+        dibujarBateria(canvas, col, col, h * 0.42f, ahora)
+        dibujarLlantas(canvas, col, col, h, ahora, h * 0.42f)
+        dibujarLibre(canvas, col * 2f, col, h)
 
-        drawTachometer(canvas, cx, cy, radius)
-
-        val midLeft = dialSize
-        val restante = w - midLeft
-        val midWidth = restante * 0.55f
-        val rightLeft = midLeft + midWidth
-        val rightWidth = w - rightLeft
-
-        drawConnectionBadge(canvas, midLeft, restante, h)
-        drawSpeed(canvas, midLeft, midWidth, h)
-        drawRightColumn(canvas, rightLeft, rightWidth, h)
+        // Separadores tenues: tres columnas sin linea se leen como un solo
+        // amontonamiento, sobre todo de reojo.
+        trazoPaint.color = COLOR_SILUETA
+        trazoPaint.strokeWidth = h * 0.004f
+        canvas.drawLine(col, h * 0.06f, col, h * 0.94f, trazoPaint)
+        canvas.drawLine(col * 2f, h * 0.06f, col * 2f, h * 0.94f, trazoPaint)
 
         postInvalidateOnAnimation()
     }
 
+    // --- Llantas ------------------------------------------------------------
+
     /**
-     * Amortiguamiento exponencial hacia el valor objetivo.
+     * Las cuatro esquinas, colocadas como estan en el carro.
      *
-     * Independiente de la duracion del frame: si se pierde un frame, la
-     * aguja avanza lo que le corresponde y no se atora.
+     * La POSICION en pantalla es el dato: no hace falta leer "trasera
+     * izquierda" si el numero ya esta abajo a la izquierda. Eso es lo que
+     * permite entenderlo de reojo, que es todo lo que se puede pedir a un
+     * tablero mientras alguien maneja.
      */
-    private fun advanceNeedle(dtMs: Float) {
-        val target = (state.rpm ?: 0).toFloat()
-        val alpha = 1f - exp(-dtMs / EngineConstants.NEEDLE_TAU_MS)
-        displayedRpm += (target - displayedRpm) * alpha.coerceIn(0f, 1f)
-    }
-
-    // --- Tacometro ----------------------------------------------------------
-
-    private fun drawTachometer(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
-        val ringWidth = radius * 0.16f
-        dialRect.set(cx - radius, cy - radius, cx + radius, cy + radius)
-
-        // 1. Canaleta de fondo: marca el recorrido completo aunque no haya dato.
-        arcPaint.strokeWidth = ringWidth
-        arcPaint.color = COLOR_TRACK
-        canvas.drawArc(dialRect, startAngleDeg, sweepDeg, false, arcPaint)
-
-        // 2. Banda VTEC: siempre dibujada, tenue. Marca DONDE vive el VTEC.
-        //    Cuando engancha se ilumina — el resaltado dice CUANDO (§6.6).
-        val vtecOn = state.vtecActive
-        arcPaint.color = if (vtecOn) COLOR_VTEC_ON else COLOR_VTEC_IDLE
-        arcPaint.strokeWidth = if (vtecOn) ringWidth else ringWidth * 0.55f
-        canvas.drawArc(
-            dialRect,
-            angleFor(EngineConstants.RPM_VTEC),
-            sweepFor(EngineConstants.RPM_VTEC, EngineConstants.RPM_MAX),
-            false,
-            arcPaint,
-        )
-
-        // 3. Zona roja: siempre pintada en la carátula.
-        arcPaint.color = COLOR_REDLINE_BAND
-        arcPaint.strokeWidth = ringWidth
-        canvas.drawArc(
-            dialRect,
-            angleFor(EngineConstants.RPM_REDLINE),
-            sweepFor(EngineConstants.RPM_REDLINE, EngineConstants.RPM_MAX),
-            false,
-            arcPaint,
-        )
-
-        // 4. Arco de valor, coloreado por el umbral de cambio. El shift light
-        //    no es una luz aparte: es este color, que se capta con vision
-        //    periferica sin mover la mirada del camino (§6.6).
-        val rpmStale = state.isStale(state.rpmAtMs, System.currentTimeMillis())
-        val shown = displayedRpm.coerceIn(0f, EngineConstants.RPM_MAX.toFloat())
-        if (shown > 0f) {
-            arcPaint.color = if (rpmStale) COLOR_STALE else shiftColor(shown)
-            arcPaint.strokeWidth = ringWidth
-            canvas.drawArc(dialRect, startAngleDeg, sweepFor(0, shown.toInt()), false, arcPaint)
-        }
-
-        // 5. Marcas y numeros cada 1000 rpm.
-        drawTicks(canvas, cx, cy, radius, ringWidth)
-
-        // 6. Maximo de la sesion: una marca fina que se queda donde llego.
-        if (state.sessionMaxRpm > 0) {
-            tickPaint.color = COLOR_SESSION_MAX
-            tickPaint.strokeWidth = radius * 0.028f
-            val a = Math.toRadians(angleFor(state.sessionMaxRpm).toDouble())
-            canvas.drawLine(
-                cx + (radius - ringWidth * 1.35f) * cos(a).toFloat(),
-                cy + (radius - ringWidth * 1.35f) * sin(a).toFloat(),
-                cx + (radius + ringWidth * 0.22f) * cos(a).toFloat(),
-                cy + (radius + ringWidth * 0.22f) * sin(a).toFloat(),
-                tickPaint,
-            )
-        }
-
-        drawNeedle(canvas, cx, cy, radius, ringWidth, shown, rpmStale)
-
-        // 7. Lectura numerica al centro: confirma lo que dice la aguja.
-        textPaint.color = if (rpmStale) COLOR_STALE else COLOR_TEXT
-        textPaint.textSize = radius * 0.36f
-        canvas.drawText(state.rpm?.toString() ?: "----", cx, cy + radius * 0.50f, textPaint)
-        labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = radius * 0.13f
-        canvas.drawText("RPM", cx, cy + radius * 0.66f, labelPaint)
-    }
-
-    private fun drawTicks(canvas: Canvas, cx: Float, cy: Float, radius: Float, ringWidth: Float) {
-        labelPaint.textSize = radius * 0.15f
-        val inner = radius - ringWidth * 1.15f
-        for (rpm in 0..EngineConstants.RPM_MAX step 1000) {
-            val a = Math.toRadians(angleFor(rpm).toDouble())
-            val cosA = cos(a).toFloat()
-            val sinA = sin(a).toFloat()
-
-            tickPaint.color = if (rpm >= EngineConstants.RPM_REDLINE) COLOR_REDLINE else COLOR_TEXT_DIM
-            tickPaint.strokeWidth = radius * 0.022f
-            canvas.drawLine(
-                cx + (inner - radius * 0.06f) * cosA,
-                cy + (inner - radius * 0.06f) * sinA,
-                cx + inner * cosA,
-                cy + inner * sinA,
-                tickPaint,
-            )
-
-            val labelR = inner - radius * 0.20f
-            labelPaint.color = if (rpm >= EngineConstants.RPM_REDLINE) COLOR_REDLINE else COLOR_TEXT_DIM
-            canvas.drawText(
-                (rpm / 1000).toString(),
-                cx + labelR * cosA,
-                cy + labelR * sinA + labelPaint.textSize * 0.35f,
-                labelPaint,
-            )
-        }
-    }
-
-    private fun drawNeedle(
-        canvas: Canvas, cx: Float, cy: Float, radius: Float,
-        ringWidth: Float, shown: Float, stale: Boolean,
+    private fun dibujarLlantas(
+        canvas: Canvas, left: Float, ancho: Float, h: Float, ahora: Long, top: Float,
     ) {
-        val a = Math.toRadians(angleFor(shown.toInt()).toDouble())
-        val cosA = cos(a).toFloat()
-        val sinA = sin(a).toFloat()
-        val tip = radius - ringWidth * 1.25f
-        val tail = radius * 0.13f
-        // La aguja se dibuja como un triangulo delgado: ancha en el pivote y
-        // en punta afuera, para que se lea de reojo.
-        val halfBase = radius * 0.035f
-        val perpX = -sinA * halfBase
-        val perpY = cosA * halfBase
+        labelPaint.textAlign = Paint.Align.CENTER
+        labelPaint.color = COLOR_TEXT_DIM
+        labelPaint.textSize = h * 0.048f
+        canvas.drawText(tituloLlantas(ahora), left + ancho * 0.5f, top + h * 0.055f, labelPaint)
 
-        needlePaint.color = if (stale) COLOR_STALE else COLOR_NEEDLE
-        needlePath.rewind()
-        needlePath.moveTo(cx + tip * cosA, cy + tip * sinA)
-        needlePath.lineTo(cx - tail * cosA + perpX, cy - tail * sinA + perpY)
-        needlePath.lineTo(cx - tail * cosA - perpX, cy - tail * sinA - perpY)
-        needlePath.close()
-        canvas.drawPath(needlePath, needlePaint)
-        canvas.drawCircle(cx, cy, radius * 0.075f, needlePaint)
-        needlePaint.color = COLOR_BG
-        canvas.drawCircle(cx, cy, radius * 0.038f, needlePaint)
+        // Silueta del carro: un rectangulo redondeado tenue detras de las
+        // cuatro cajas. No decora — es lo que dice que arriba es adelante.
+        val margenX = ancho * 0.13f
+        val topRejilla = top + h * 0.085f
+        val altoRejilla = h * 0.93f - topRejilla
+        caja.set(left + margenX, topRejilla, left + ancho - margenX, topRejilla + altoRejilla)
+        trazoPaint.color = COLOR_SILUETA
+        trazoPaint.strokeWidth = h * 0.006f
+        canvas.drawRoundRect(caja, ancho * 0.10f, ancho * 0.10f, trazoPaint)
+
+        // "ADELANTE" arriba: sin esto, un tablero de cuatro numeros no dice
+        // por si solo cual esquina es cual.
+        labelPaint.textSize = h * 0.036f
+        labelPaint.color = COLOR_SILUETA_TEXTO
+        canvas.drawText("ADELANTE", left + ancho * 0.5f, topRejilla + h * 0.045f, labelPaint)
+
+        val anchoCelda = ancho * 0.36f
+        val altoCelda = altoRejilla * 0.36f
+        val xIzq = left + ancho * 0.30f
+        val xDer = left + ancho * 0.70f
+        val yArriba = topRejilla + altoRejilla * 0.33f
+        val yAbajo = topRejilla + altoRejilla * 0.76f
+
+        dibujarRueda(canvas, Rueda.DelanteraIzquierda, xIzq, yArriba, anchoCelda, altoCelda, ahora)
+        dibujarRueda(canvas, Rueda.DelanteraDerecha, xDer, yArriba, anchoCelda, altoCelda, ahora)
+        dibujarRueda(canvas, Rueda.TraseraIzquierda, xIzq, yAbajo, anchoCelda, altoCelda, ahora)
+        dibujarRueda(canvas, Rueda.TraseraDerecha, xDer, yAbajo, anchoCelda, altoCelda, ahora)
     }
 
     /**
-     * Verde, ambar, rojo — y parpadeo cerca del corte de combustible, que es
-     * el unico momento donde el parpadeo se gana el costo de distraer.
+     * Encabezado que dice si hay que creerle a los numeros de abajo.
+     *
+     * Un titulo fijo que dijera "LLANTAS" mientras el receptor esta
+     * desconectado seria mentir por omision: los cuatro valores viejos
+     * seguirian ahi, y nada avisaria de que ya no son de ahora.
      */
-    private fun shiftColor(rpm: Float): Int = when {
-        rpm >= EngineConstants.RPM_FUEL_CUT - 300 -> {
-            val on = (System.currentTimeMillis() / 90) % 2 == 0L
-            if (on) COLOR_REDLINE else COLOR_AMBER
+    private fun tituloLlantas(ahora: Long): String = when (enlaceTpms) {
+        EnlaceTpms.SinReceptor -> "LLANTAS — sin receptor USB"
+        EnlaceTpms.SinPermiso -> "LLANTAS — sin permiso USB"
+        EnlaceTpms.Abriendo -> "LLANTAS — conectando receptor"
+        EnlaceTpms.Leyendo ->
+            if (tpms.ruedas.isEmpty()) "LLANTAS — esperando sensores"
+            else "LLANTAS · psi (placa ${Escalas.PSI_PLACA.toInt()})"
+        EnlaceTpms.Fallo -> "LLANTAS — el receptor no responde"
+    }
+
+    /**
+     * Una esquina: presion grande, temperatura pequeña.
+     *
+     * La presion manda porque es la que hace parar el carro. La temperatura
+     * acompaña, mas chica, porque casi nunca cambia la decision.
+     */
+    private fun dibujarRueda(
+        canvas: Canvas, rueda: Rueda, cx: Float, cy: Float,
+        ancho: Float, alto: Float, ahora: Long,
+    ) {
+        val lectura = tpms.de(rueda)
+        val psi = lectura?.presionPsi
+        val rancia = lectura?.rancia(ahora) ?: true
+
+        // Nunca se pinta un cero como lectura: el decodificador ya devuelve
+        // null cuando el receptor no tiene dato, y aqui eso son guiones. Un
+        // "0.0" haria creer en un reventon que no existe.
+        val color = when {
+            psi == null || rancia -> COLOR_STALE
+            psi !in Escalas.PSI_PLAUSIBLE -> COLOR_VTEC_ON   // escala sospechosa
+            psi < Escalas.PSI_AVISO_BAJA -> if (parpadeo()) COLOR_REDLINE else COLOR_AMBER
+            psi < Escalas.PSI_PLACA - 3f -> COLOR_AMBER
+            psi > Escalas.PSI_PLACA + 8f -> COLOR_AMBER
+            else -> COLOR_GREEN
         }
-        rpm >= EngineConstants.RPM_REDLINE -> COLOR_REDLINE
-        rpm >= EngineConstants.RPM_SHIFT_AMBER -> COLOR_AMBER
-        else -> COLOR_GREEN
-    }
 
-    private fun angleFor(rpm: Int): Float =
-        startAngleDeg + sweepDeg * (rpm.toFloat() / EngineConstants.RPM_MAX).coerceIn(0f, 1f)
+        // Fondo de la caja: casi negro cuando todo va bien, tintado cuando no.
+        // Asi una llanta baja se localiza sin leer un solo numero.
+        caja.set(cx - ancho * 0.5f, cy - alto * 0.5f, cx + ancho * 0.5f, cy + alto * 0.5f)
+        barPaint.color = if (color == COLOR_GREEN || color == COLOR_STALE) COLOR_CAJA else color
+        if (barPaint.color != COLOR_CAJA) {
+            // Aviso: el relleno va tenue para no encandilar de noche, y el
+            // borde marca la caja con fuerza.
+            barPaint.color = COLOR_CAJA_AVISO
+        }
+        canvas.drawRoundRect(caja, alto * 0.18f, alto * 0.18f, barPaint)
+        trazoPaint.color = color
+        trazoPaint.strokeWidth = alto * 0.035f
+        canvas.drawRoundRect(caja, alto * 0.18f, alto * 0.18f, trazoPaint)
 
-    private fun sweepFor(fromRpm: Int, toRpm: Int): Float =
-        sweepDeg * ((toRpm - fromRpm).toFloat() / EngineConstants.RPM_MAX).coerceIn(0f, 1f)
-
-    // --- Columna central: velocidad ----------------------------------------
-
-    private fun drawSpeed(canvas: Canvas, left: Float, ancho: Float, h: Float) {
-        val cx = left + ancho * 0.5f
-        val stale = state.isStale(state.speedAtMs, System.currentTimeMillis())
-
-        textPaint.color = if (stale) COLOR_STALE else COLOR_TEXT
-        // El numero se mide antes de pintarlo y se encoge si tres digitos no
-        // caben en la columna. En una pantalla mas angosta que la del radio
-        // se recortaria en silencio, y un tablero no puede mentir por recorte.
-        textPaint.textSize = h * 0.46f
-        val texto = state.speedKmh?.toString() ?: "--"
-        val maximo = ancho * 0.92f
-        val medido = textPaint.measureText(texto)
-        if (medido > maximo) textPaint.textSize = textPaint.textSize * (maximo / medido)
-
-        canvas.drawText(texto, cx, h * 0.62f, textPaint)
-
+        // Etiqueta de la esquina, discreta: la posicion ya lo dice, esto solo
+        // confirma para quien mira por primera vez.
+        labelPaint.textAlign = Paint.Align.LEFT
         labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = h * 0.085f
-        canvas.drawText("km/h", cx, h * 0.75f, labelPaint)
+        labelPaint.textSize = alto * 0.20f
+        canvas.drawText(rueda.corta, caja.left + ancho * 0.06f, caja.top + alto * 0.26f, labelPaint)
+        labelPaint.textAlign = Paint.Align.CENTER
+
+        textPaint.color = color
+        textPaint.textSize = alto * 0.50f
+        val texto = psi?.let { String.format("%.0f", it) } ?: "--"
+        canvas.drawText(texto, cx, cy + alto * 0.16f, textPaint)
+
+        labelPaint.color = if (rancia) COLOR_STALE else COLOR_TEXT_DIM
+        labelPaint.textSize = alto * 0.16f
+        canvas.drawText(pieDeRueda(lectura, rancia, ahora), cx, caja.bottom - alto * 0.09f, labelPaint)
     }
 
-    // --- Columna derecha: agua, aire, carga, bateria -----------------------
+    /**
+     * El pie de cada caja explica POR QUE un numero no esta o no vale.
+     *
+     * "--" a secas deja al conductor sin saber si el sensor murio, si el
+     * receptor esta desconectado o si simplemente no ha llegado nada todavia.
+     */
+    private fun pieDeRueda(
+        lectura: com.nonosky.s2000dash.tpms.LecturaRueda?,
+        rancia: Boolean,
+        ahora: Long,
+    ): String {
+        if (lectura == null) return "sin sensor"
+        if (rancia) return "dato viejo"
+        val psi = lectura.presionPsi
+        if (psi != null && psi !in Escalas.PSI_PLAUSIBLE) return "escala dudosa"
+        val t = lectura.temperaturaC ?: return "psi"
+        return "$t °C"
+    }
 
-    private fun drawRightColumn(canvas: Canvas, left: Float, ancho: Float, h: Float) {
-        val now = System.currentTimeMillis()
-        val margen = ancho * 0.06f
+    /** 500 ms encendido, 500 ms apagado. Solo para presion bajo el aviso. */
+    private fun parpadeo(): Boolean = (System.currentTimeMillis() / 500) % 2 == 0L
+
+
+    // --- Bateria de litio ---------------------------------------------------
+
+    /**
+     * El BMS de litio, arriba de las llantas en la columna del medio.
+     *
+     * Hoy esto solo puede decir que la bateria ESTA: el barrido BLE por el
+     * dongle USB la encuentra y da su MAC y su señal. El voltaje y el SoC
+     * viven detras de una conexion GATT que todavia no esta escrita, y
+     * mientras no lo este se pintan como huecos.
+     *
+     * Es deliberado y es lo unico honesto: un "0.0 V" en un tablero de carro
+     * significa bateria muerta. Un hueco significa "no lo se todavia". Pintar
+     * el primero cuando la verdad es el segundo es la clase de mentira que
+     * hace que nadie vuelva a creerle al tablero.
+     */
+    private fun dibujarBateria(canvas: Canvas, left: Float, ancho: Float, alto: Float, ahora: Long) {
+        val margen = ancho * 0.08f
         val x0 = left + margen
         val x1 = left + ancho - margen
 
-        // El agua lleva barra ademas del numero: es el unico dato donde
-        // importa la tendencia y no solo el valor.
-        val c = state.coolantC
-        val aguaStale = state.isStale(state.coolantAtMs, now)
-        drawRow(canvas, x0, x1, h * 0.20f, h, "AGUA", c?.let { "$it °C" } ?: "-- °C", aguaStale)
+        labelPaint.textAlign = Paint.Align.CENTER
+        labelPaint.color = COLOR_TEXT_DIM
+        labelPaint.textSize = alto * 0.13f
+        canvas.drawText(tituloBateria(ahora), left + ancho * 0.5f, alto * 0.20f, labelPaint)
 
-        val barTop = h * 0.245f
-        val barH = h * 0.055f
-        barPaint.color = COLOR_TRACK
+        val rancia = bateria.rancia(ahora)
+
+        // Voltaje grande cuando exista; hasta entonces, guiones grandes. El
+        // tamaño se reserva ya para que el dia que llegue el dato no se mueva
+        // nada de sitio.
+        textPaint.color = if (bateria.voltaje == null || rancia) COLOR_STALE else COLOR_GREEN
+        textPaint.textSize = alto * 0.40f
+        canvas.drawText(
+            bateria.voltaje?.let { String.format("%.2f V", it) } ?: "-- V",
+            left + ancho * 0.5f, alto * 0.60f, textPaint,
+        )
+
+        labelPaint.textSize = alto * 0.115f
+        labelPaint.color = COLOR_TEXT_DIM
+        canvas.drawText(pieBateria(), left + ancho * 0.5f, alto * 0.78f, labelPaint)
+
+        // Fila fina con SoC y temperatura: reservadas igual que el voltaje.
+        fila(canvas, x0, x1, alto * 0.95f, alto * 1.9f, "SoC",
+            bateria.soc?.let { "$it %" } ?: "-- %", bateria.soc == null, COLOR_TEXT)
+    }
+
+    private fun tituloBateria(ahora: Long): String = when (bateria.enlace) {
+        EnlaceBateria.SinDongle -> "BATERIA — sin dongle USB"
+        EnlaceBateria.DongleMudo -> "BATERIA — el dongle no contesta"
+        EnlaceBateria.Buscando -> "BATERIA — buscando"
+        EnlaceBateria.Detectada ->
+            if (bateria.rancia(ahora)) "BATERIA — se dejo de oir" else "BATERIA DE LITIO"
+        EnlaceBateria.Leyendo -> "BATERIA DE LITIO · en linea"
+        EnlaceBateria.Fallo -> "BATERIA — fallo el dongle"
+    }
+
+    /**
+     * Explica POR QUE no hay voltaje, en vez de dejar los guiones mudos.
+     *
+     * Sin esto, un "-- V" no distingue entre "no encuentro la bateria" y
+     * "la encuentro pero aun no se leerla", que son dos problemas con dos
+     * soluciones completamente distintas.
+     */
+    private fun pieBateria(): String {
+        if (!bateria.detectada()) return bateria.detalle ?: "no localizada"
+        if (bateria.voltaje != null) return bateria.nombre ?: "BMS"
+        val señal = bateria.rssi?.let { " · ${it} dBm" } ?: ""
+        return "detectada$señal · falta leer el BMS"
+    }
+
+    // --- Columna libre ------------------------------------------------------
+
+    /** Reservada. Vacia a proposito, y dicho para que no parezca un fallo. */
+    private fun dibujarLibre(canvas: Canvas, left: Float, ancho: Float, h: Float) {
+        labelPaint.textAlign = Paint.Align.CENTER
+        labelPaint.color = COLOR_SILUETA_TEXTO
+        labelPaint.textSize = h * 0.048f
+        canvas.drawText("LIBRE", left + ancho * 0.5f, h * 0.50f, labelPaint)
+    }
+
+    // --- Motor --------------------------------------------------------------
+
+    /**
+     * Agua, aire, carga y voltaje. Formato de vigilancia: chico y quieto.
+     *
+     * Va aparte del TPMS a proposito, y se pinta aunque el OBD este muerto:
+     * antes todo el tablero colgaba del enlace OBD, asi que sin adaptador no
+     * habia NADA en pantalla. Con dos fuentes independientes, las llantas se
+     * ven aunque el motor no conteste — que es exactamente el caso hoy.
+     */
+    private fun dibujarMotor(canvas: Canvas, left: Float, ancho: Float, h: Float, ahora: Long) {
+        val margen = ancho * 0.08f
+        val x0 = left + margen
+        val x1 = left + ancho - margen
+
+        labelPaint.textAlign = Paint.Align.CENTER
+        labelPaint.color = COLOR_TEXT_DIM
+        labelPaint.textSize = h * 0.055f
+        canvas.drawText(tituloMotor(), left + ancho * 0.5f, h * 0.10f, labelPaint)
+
+        val c = state.coolantC
+        val aguaStale = state.isStale(state.coolantAtMs, ahora)
+        fila(canvas, x0, x1, h * 0.26f, h, "AGUA", c?.let { "$it °C" } ?: "-- °C", aguaStale,
+            colorAgua(c, aguaStale))
+
+        // El agua lleva barra ademas del numero: es el unico dato del motor
+        // donde importa la tendencia y no solo el valor.
+        val barTop = h * 0.305f
+        val barH = h * 0.045f
+        barPaint.color = COLOR_CAJA
         canvas.drawRoundRect(x0, barTop, x1, barTop + barH, barH / 2, barH / 2, barPaint)
         if (c != null) {
-            // Escala util: de 40 a 120 °C. Debajo el motor esta frio y arriba
-            // ya es problema; mas resolucion no ayudaria a decidir nada.
             val t = ((c - 40f) / 80f).coerceIn(0f, 1f)
-            barPaint.color = when {
-                aguaStale -> COLOR_STALE
-                c >= EngineConstants.COOLANT_HIGH_C -> COLOR_REDLINE
-                c >= EngineConstants.COOLANT_NORMAL_C -> COLOR_GREEN
-                else -> COLOR_COLD
-            }
+            barPaint.color = colorAgua(c, aguaStale)
             canvas.drawRoundRect(x0, barTop, x0 + (x1 - x0) * t, barTop + barH, barH / 2, barH / 2, barPaint)
         }
 
-        drawRow(canvas, x0, x1, h * 0.48f, h, "AIRE",
-            state.iatC?.let { "$it °C" } ?: "-- °C", state.isStale(state.iatAtMs, now))
-        drawRow(canvas, x0, x1, h * 0.65f, h, "CARGA",
-            state.loadPct?.let { "$it %" } ?: "-- %", state.isStale(state.loadAtMs, now))
-        drawRow(canvas, x0, x1, h * 0.82f, h, "BATERIA",
+        fila(canvas, x0, x1, h * 0.50f, h, "AIRE",
+            state.iatC?.let { "$it °C" } ?: "-- °C",
+            state.isStale(state.iatAtMs, ahora), COLOR_TEXT)
+        fila(canvas, x0, x1, h * 0.65f, h, "CARGA",
+            state.loadPct?.let { "$it %" } ?: "-- %",
+            state.isStale(state.loadAtMs, ahora), COLOR_TEXT)
+        // Este voltaje es el que da el propio adaptador OBD con ATRV: es el
+        // del sistema electrico, medido en el puerto. No es el BMS — ese va en
+        // su columna. Se llama SISTEMA para que nadie confunda los dos.
+        fila(canvas, x0, x1, h * 0.80f, h, "SISTEMA",
             state.batteryV?.let { String.format("%.1f V", it) } ?: "-- V",
-            state.isStale(state.batteryAtMs, now))
+            state.isStale(state.batteryAtMs, ahora), COLOR_TEXT)
     }
 
-    /** Etiqueta a la izquierda, valor a la derecha, ambos en la misma linea. */
-    private fun drawRow(
+    private fun colorAgua(c: Int?, stale: Boolean): Int = when {
+        c == null || stale -> COLOR_STALE
+        c >= EngineConstants.COOLANT_HIGH_C -> COLOR_REDLINE
+        c >= EngineConstants.COOLANT_NORMAL_C -> COLOR_GREEN
+        else -> COLOR_COLD
+    }
+
+    /** El estado del OBD, que ya no ocupa una insignia aparte. */
+    private fun tituloMotor(): String = when (state.connection) {
+        ConnectionState.Polling -> "MOTOR · " + (state.protocol?.take(18) ?: "en linea")
+        ConnectionState.Initializing -> "MOTOR — iniciando"
+        ConnectionState.Connecting -> "MOTOR — conectando"
+        ConnectionState.SinAdaptador -> "MOTOR — sin adaptador"
+        ConnectionState.BluetoothApagado -> "MOTOR — Bluetooth apagado"
+        ConnectionState.Disconnected -> "MOTOR — sin enlace"
+    }
+
+    /** Etiqueta a la izquierda, valor a la derecha, en la misma linea. */
+    private fun fila(
         canvas: Canvas, x0: Float, x1: Float, y: Float, h: Float,
-        etiqueta: String, valor: String, stale: Boolean,
+        etiqueta: String, valor: String, stale: Boolean, color: Int,
     ) {
         labelPaint.textAlign = Paint.Align.LEFT
         labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = h * 0.075f
+        labelPaint.textSize = h * 0.070f
         canvas.drawText(etiqueta, x0, y, labelPaint)
 
         labelPaint.textAlign = Paint.Align.RIGHT
-        labelPaint.color = if (stale) COLOR_STALE else COLOR_TEXT
+        labelPaint.color = if (stale) COLOR_STALE else color
         labelPaint.textSize = h * 0.095f
         canvas.drawText(valor, x1, y, labelPaint)
 
         labelPaint.textAlign = Paint.Align.CENTER
     }
 
-    /** Un punto de color y una palabra: basta para saber si el dato es vivo. */
-    private fun drawConnectionBadge(canvas: Canvas, left: Float, ancho: Float, h: Float) {
-        // El texto tiene que decir QUE HACER, no solo que algo va mal. Un
-        // "SIN ENLACE" identico para "no hay adaptador elegido" y para "el
-        // adaptador no contesta" deja al conductor sin saber si le toca
-        // configurar algo o esperar.
-        val (color, texto) = when (state.connection) {
-            ConnectionState.Polling -> COLOR_GREEN to (state.protocol?.take(22) ?: "EN LINEA")
-            ConnectionState.Initializing -> COLOR_AMBER to "INICIANDO"
-            ConnectionState.Connecting -> COLOR_AMBER to "CONECTANDO"
-            ConnectionState.SinAdaptador -> COLOR_VTEC_ON to "TOCA PARA ELEGIR ADAPTADOR"
-            ConnectionState.BluetoothApagado -> COLOR_AMBER to "ENCIENDE EL BLUETOOTH"
-            ConnectionState.Disconnected -> COLOR_REDLINE to "SIN ENLACE"
-        }
-        val r = h * 0.018f
-        val cx = left + ancho * 0.5f
-        val y = h * 0.11f
-
-        labelPaint.textSize = h * 0.058f
-        labelPaint.color = COLOR_TEXT_DIM
-        val anchoTexto = labelPaint.measureText(texto)
-        barPaint.color = color
-        canvas.drawCircle(cx - anchoTexto / 2 - r * 2.4f, y - h * 0.017f, r, barPaint)
-        canvas.drawText(texto, cx, y, labelPaint)
-    }
-
     private companion object {
         // Paleta oscura: es un tablero para manejar, casi siempre de noche o
         // con sol directo. El fondo negro maximiza el contraste en ambos.
         const val COLOR_BG = 0xFF07090C.toInt()
-        const val COLOR_TRACK = 0xFF1B2129.toInt()
+        const val COLOR_CAJA = 0xFF141A21.toInt()
+        const val COLOR_CAJA_AVISO = 0xFF23161A.toInt()
+        const val COLOR_SILUETA = 0xFF1B2129.toInt()
+        const val COLOR_SILUETA_TEXTO = 0xFF3A4550.toInt()
         const val COLOR_TEXT = Color.WHITE
         const val COLOR_TEXT_DIM = 0xFF8A96A3.toInt()
         const val COLOR_STALE = 0xFF5A6470.toInt()
-        const val COLOR_NEEDLE = 0xFFF5F7FA.toInt()
         const val COLOR_GREEN = 0xFF35D07F.toInt()
         const val COLOR_AMBER = 0xFFFFB020.toInt()
         const val COLOR_REDLINE = 0xFFFF3B30.toInt()
-        const val COLOR_REDLINE_BAND = 0xFF4A1512.toInt()
-        const val COLOR_VTEC_IDLE = 0xFF15303D.toInt()
         const val COLOR_VTEC_ON = 0xFF00C2FF.toInt()
-        const val COLOR_SESSION_MAX = 0xFFB388FF.toInt()
         const val COLOR_COLD = 0xFF3D8BFF.toInt()
     }
 }
