@@ -49,7 +49,17 @@ class UpdateChecker(private val context: Context) {
     private fun reachable(base: String): Boolean =
         fetchText("$base/version.json") != null
 
-    /** @return true si arranco una instalacion. */
+    /**
+     * @return true si arranco una instalacion.
+     *
+     * Trae freno propio a proposito. La primera version revisaba en cada
+     * `onStart`, y como al cerrarse el dialogo del instalador el tablero
+     * vuelve al primer plano, eso disparaba OTRA instalacion: un bucle que
+     * dejaba el radio inservible, pidiendo confirmacion sin parar. Ahora un
+     * intento fallido con la misma version no se repite hasta pasado
+     * [ESPERA_TRAS_FALLO_MS], y tras [MAX_INTENTOS] se abandona esa version
+     * hasta que salga otra.
+     */
     fun checkAndInstall(): Boolean {
         return try {
             val base = resolveBase() ?: return false
@@ -72,8 +82,11 @@ class UpdateChecker(private val context: Context) {
             val local = installedVersionCode()
             if (remote <= local) {
                 UpdateState.note("Al dia (local=$local remoto=$remote)")
+                olvidarIntentos()
                 return false
             }
+
+            if (!sePuedeIntentar(remote)) return false
 
             UpdateState.note("Actualizando de $local a $remote")
             val apk = File(context.filesDir, "update-$remote.apk")
@@ -98,7 +111,11 @@ class UpdateChecker(private val context: Context) {
             }
 
             limpiarDescargasViejas(apk)
+            anotarIntento(remote)
             UpdateState.armar(remote)
+            // Armar tambien el APK confirmador, que es el que de verdad
+            // sobrevive a que el tablero se actualice a si mismo.
+            AutoInstaller.armarConfirmador(context, remote)
             val arrancada = AutoInstaller.install(context, apk)
             if (!arrancada) UpdateState.desarmar()
             arrancada
@@ -107,6 +124,45 @@ class UpdateChecker(private val context: Context) {
             UpdateState.note("Fallo la revision: ${e.message}")
             false
         }
+    }
+
+    /**
+     * Freno contra el bucle de reinstalacion.
+     *
+     * Si la instalacion no cuaja —porque alguien cancela el dialogo, o
+     * porque el confirmador no esta activo— no sirve de nada volver a
+     * pedirla al instante: lo unico que se consigue es tapar la pantalla
+     * una y otra vez.
+     */
+    private fun sePuedeIntentar(version: Int): Boolean {
+        val intentos = prefs.getInt(KEY_INTENTOS + version, 0)
+        if (intentos >= MAX_INTENTOS) {
+            UpdateState.note("v$version abandonada tras $intentos intentos")
+            return false
+        }
+        val ultimo = prefs.getLong(KEY_ULTIMO + version, 0)
+        val espera = System.currentTimeMillis() - ultimo
+        if (ultimo != 0L && espera < ESPERA_TRAS_FALLO_MS) {
+            UpdateState.note("v$version en espera (${(ESPERA_TRAS_FALLO_MS - espera) / 1000}s)")
+            return false
+        }
+        return true
+    }
+
+    private fun anotarIntento(version: Int) {
+        prefs.edit()
+            .putInt(KEY_INTENTOS + version, prefs.getInt(KEY_INTENTOS + version, 0) + 1)
+            .putLong(KEY_ULTIMO + version, System.currentTimeMillis())
+            .apply()
+    }
+
+    /** Al quedar al dia se borra el historial: la cuenta era de ese salto. */
+    private fun olvidarIntentos() {
+        val viejas = prefs.all.keys.filter {
+            it.startsWith(KEY_INTENTOS) || it.startsWith(KEY_ULTIMO)
+        }
+        if (viejas.isEmpty()) return
+        prefs.edit().apply { viejas.forEach { remove(it) } }.apply()
     }
 
     /** El almacenamiento de un head unit es pequeno: no acumular APKs. */
@@ -171,5 +227,13 @@ class UpdateChecker(private val context: Context) {
         private const val TAG = "UpdateChecker"
         private const val PREFS = "s2000dash-update"
         private const val KEY_BASE = "base_url"
+        private const val KEY_INTENTOS = "intentos_v"
+        private const val KEY_ULTIMO = "ultimo_v"
+
+        /** Tras un intento fallido, no volver a molestar en 10 minutos. */
+        const val ESPERA_TRAS_FALLO_MS = 10 * 60 * 1000L
+
+        /** Tres intentos y esa version se abandona hasta que salga otra. */
+        const val MAX_INTENTOS = 3
     }
 }

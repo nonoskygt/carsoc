@@ -39,6 +39,14 @@
          nadie revisa si hay actualizacion hasta que alguien toque el icono. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Para armar el APK confirmador. Nivel "signature": solo funciona
+         porque ambos APK llevan el mismo certificado. -->
+    <uses-permission android:name="com.nonosky.s2000dash.permission.ARMAR" />
+
+    <queries>
+        <package android:name="com.nonosky.s2000dash.confirmador" />
+    </queries>
+
     <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
 
     <application
@@ -86,23 +94,6 @@
             </intent-filter>
         </receiver>
 
-        <!--
-          Confirma por nosotros el dialogo del instalador. Hay que activarlo
-          UNA vez en Ajustes -> Accesibilidad; despues el radio se actualiza
-          solo con publicar una version nueva en el servidor.
-        -->
-        <service
-            android:name=".a11y.InstallAutoClickService"
-            android:exported="false"
-            android:label="@string/a11y_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service" />
-        </service>
     </application>
 
 </manifest>

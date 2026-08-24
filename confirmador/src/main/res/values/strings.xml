@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">S2000 Dash — Confirmador</string>
+    <string name="a11y_label">Confirmar actualizaciones de S2000 Dash</string>
+    <string name="a11y_description">Pulsa «Instalar» cuando S2000 Dash se actualiza, para que el radio no necesite que nadie lo toque. Solo actúa si S2000 Dash acaba de pedir una instalación, y nunca sobre diálogos de desinstalación o de permisos.</string>
+</resources>

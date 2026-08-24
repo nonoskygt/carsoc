@@ -51,6 +51,9 @@ object UpdateState {
         note("Instalacion armada para v$versionCode")
     }
 
+    /** Duracion por defecto de la ventana de confirmacion. */
+    const val DURACION_ARMADO_MS = 120_000L
+
     fun desarmar() {
         armadoHastaMs = 0
         versionArmada = -1

@@ -50,6 +50,7 @@ class DashActivity : ComponentActivity() {
 
     private val updater by lazy { UpdateChecker(applicationContext) }
     private var debugServer: DebugServer? = null
+    private val revisoActualizacion = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** El adaptador elegido, para poder arrancar y parar con el ciclo de vida. */
     private var chosen: BluetoothDevice? = null
@@ -134,8 +135,25 @@ class DashActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         chosen?.let { beginPolling(it) }
-        // Revisar si hay version nueva al abrir. Va en un hilo aparte: hace
-        // red y no puede tocar el hilo principal.
+        revisarActualizacionUnaVez()
+    }
+
+    /**
+     * Revisa si hay version nueva, UNA sola vez por vida del proceso.
+     *
+     * Antes se revisaba en cada `onStart`, y eso creaba un bucle: al
+     * cerrarse el dialogo del instalador el tablero vuelve al primer plano,
+     * lo que dispara otro `onStart`, que pide otra instalacion... El radio
+     * se quedaba pidiendo confirmacion sin parar y no se podia usar.
+     *
+     * Con una sola revision por arranque basta: tras instalar, el sistema
+     * mata el proceso y [BootReceiver] vuelve a abrir el tablero, asi que
+     * la siguiente revision llega igual.
+     */
+    private fun revisarActualizacionUnaVez() {
+        if (!revisoActualizacion.compareAndSet(false, true)) return
+        // Hilo aparte: hace red y descubrimiento UDP, nada de eso puede
+        // tocar el hilo principal.
         Thread { runCatching { updater.checkAndInstall() } }.start()
     }
 

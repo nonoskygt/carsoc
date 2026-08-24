@@ -24,6 +24,27 @@ object AutoInstaller {
     private const val TAG = "AutoInstaller"
     const val ACTION_INSTALL_STATUS = "com.nonosky.s2000dash.INSTALL_STATUS"
 
+    /** El APK aparte que pulsa "Instalar" por nosotros. */
+    private const val CONFIRMADOR = "com.nonosky.s2000dash.confirmador"
+    private const val ACCION_ARMAR = "com.nonosky.s2000dash.ARMAR_INSTALACION"
+
+    /**
+     * Avisa al confirmador externo de que va a salir un dialogo nuestro.
+     *
+     * El confirmador vive en otro APK porque Android desactiva el servicio
+     * de accesibilidad de una app en cuanto esa app se actualiza — con el
+     * confirmador dentro del tablero, la cadena servia una sola vez.
+     */
+    fun armarConfirmador(context: Context, versionCode: Int) {
+        val intent = Intent(ACCION_ARMAR).apply {
+            setPackage(CONFIRMADOR)
+            putExtra("versionCode", versionCode)
+            putExtra("duracionMs", 120_000L)
+        }
+        runCatching { context.sendBroadcast(intent) }
+            .onFailure { Log.w(TAG, "No se pudo armar el confirmador: ${it.message}") }
+    }
+
     /** Si es false hay que mandar al usuario a "instalar apps desconocidas". */
     fun canInstall(context: Context): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

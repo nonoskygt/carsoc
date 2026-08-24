@@ -1,16 +1,16 @@
-package com.nonosky.s2000dash.a11y
+package com.nonosky.s2000dash.confirmador
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * La parte con riesgo real del auto-confirmador.
+ * La parte con riesgo real del confirmador.
  *
  * Un fallo aqui no es un numero mal pintado: es un servicio de
  * accesibilidad tocando el boton equivocado en una ventana del sistema.
  */
-class InstallDialogRulesTest {
+class ReglasTest {
 
     // --- Lo que SI se toca --------------------------------------------------
 
@@ -18,7 +18,7 @@ class InstallDialogRulesTest {
     fun `confirma los botones de instalar en ambos idiomas`() {
         for (t in listOf("Instalar", "INSTALAR", "install", "Install",
                          "Actualizar", "Update", "  Instalar  ")) {
-            assertTrue("debio confirmar '$t'", InstallDialogRules.isConfirmButton(t))
+            assertTrue("debio confirmar '$t'", Reglas.esBotonDeConfirmar(t))
         }
     }
 
@@ -28,7 +28,7 @@ class InstallDialogRulesTest {
         // Estaban en la lista de confirmacion y el auto-confirmador podia
         // acabar borrando la app o concediendo permisos sin que nadie viera.
         for (t in listOf("Aceptar", "OK", "Listo", "Continuar", "Permitir", "Conceder")) {
-            assertFalse("JAMAS debio tocar '$t'", InstallDialogRules.isConfirmButton(t))
+            assertFalse("JAMAS debio tocar '$t'", Reglas.esBotonDeConfirmar(t))
         }
     }
 
@@ -41,7 +41,7 @@ class InstallDialogRulesTest {
         // rompe, el auto-confirmador cancelaria cada actualizacion.
         for (t in listOf("Cancelar", "cancel", "No instalar", "Don't install",
                          "Rechazar", "Deny", "Desinstalar", "Uninstall", "Atrás", "Back")) {
-            assertFalse("JAMAS debio tocar '$t'", InstallDialogRules.isConfirmButton(t))
+            assertFalse("JAMAS debio tocar '$t'", Reglas.esBotonDeConfirmar(t))
         }
     }
 
@@ -49,7 +49,7 @@ class InstallDialogRulesTest {
     fun `no toca botones desconocidos`() {
         for (t in listOf("Detalles", "Más información", "Configuración",
                          "Permitir siempre", "Conceder", "", "   ", null)) {
-            assertFalse("no debio tocar '$t'", InstallDialogRules.isConfirmButton(t))
+            assertFalse("no debio tocar '$t'", Reglas.esBotonDeConfirmar(t))
         }
     }
 
@@ -57,14 +57,14 @@ class InstallDialogRulesTest {
 
     @Test
     fun `solo actua sobre instaladores del sistema`() {
-        assertTrue(InstallDialogRules.isInstallerPackage("com.android.packageinstaller"))
-        assertTrue(InstallDialogRules.isInstallerPackage("com.google.android.packageinstaller"))
-        assertTrue(InstallDialogRules.isInstallerPackage("com.android.permissioncontroller"))
+        assertTrue(Reglas.esInstalador("com.android.packageinstaller"))
+        assertTrue(Reglas.esInstalador("com.google.android.packageinstaller"))
+        assertTrue(Reglas.esInstalador("com.android.permissioncontroller"))
 
-        assertFalse(InstallDialogRules.isInstallerPackage("com.whatsapp"))
-        assertFalse(InstallDialogRules.isInstallerPackage("com.android.settings"))
-        assertFalse(InstallDialogRules.isInstallerPackage("com.android.vending"))
-        assertFalse(InstallDialogRules.isInstallerPackage(null))
+        assertFalse(Reglas.esInstalador("com.whatsapp"))
+        assertFalse(Reglas.esInstalador("com.android.settings"))
+        assertFalse(Reglas.esInstalador("com.android.vending"))
+        assertFalse(Reglas.esInstalador(null))
     }
 
     @Test
@@ -72,9 +72,9 @@ class InstallDialogRulesTest {
         // Aunque la ventana diga ser nuestra: ese texto lo pone el APK que
         // se esta instalando, no el sistema.
         assertFalse(
-            InstallDialogRules.puedeConfirmar(
+            Reglas.puedeConfirmar(
                 listOf("¿Quieres actualizar esta aplicación?", "S2000 Dash"),
-                sesionArmada = false,
+                armado = false,
             )
         )
     }
@@ -82,9 +82,9 @@ class InstallDialogRulesTest {
     @Test
     fun `con sesion armada se confirma la instalacion`() {
         assertTrue(
-            InstallDialogRules.puedeConfirmar(
+            Reglas.puedeConfirmar(
                 listOf("¿Quieres actualizar esta aplicación?", "S2000 Dash"),
-                sesionArmada = true,
+                armado = true,
             )
         )
     }
@@ -94,13 +94,13 @@ class InstallDialogRulesTest {
         // Si por lo que sea aparece otro dialogo dentro de la ventana de
         // tiempo, el servicio se aparta.
         assertFalse(
-            InstallDialogRules.puedeConfirmar(
-                listOf("¿Quieres desinstalar esta aplicación?"), sesionArmada = true
+            Reglas.puedeConfirmar(
+                listOf("¿Quieres desinstalar esta aplicación?"), armado = true
             )
         )
         assertFalse(
-            InstallDialogRules.puedeConfirmar(
-                listOf("¿Permitir que S2000 Dash acceda a tu ubicación?"), sesionArmada = true
+            Reglas.puedeConfirmar(
+                listOf("¿Permitir que S2000 Dash acceda a tu ubicación?"), armado = true
             )
         )
     }

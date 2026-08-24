@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "S2000Dash"
 include(":app")
+include(":confirmador")
