@@ -8,46 +8,53 @@ Este archivo captura DÓNDE nos quedamos, para no repetir trabajo ni perder lo v
 
 ## Resumen en una línea
 
-✅ **ACCESO AL RADIO RESUELTO.** SimpleSSHD (puerto 2222) quedó descartado por su OTP
-rotativa + bug de ruta de `authorized_keys`. Se usa **Termux SSH (puerto 8022)** con
-llave ed25519 sin passphrase — login sin password, funcionando. Ya se leyeron todas
-las specs del radio (ver abajo). Toca decidir el toolchain de build y empezar el APK.
+✅ **ACCESO AL RADIO RESUELTO — DOS VÍAS, misma llave, sin password.** Ya se leyeron
+todas las specs del radio (ver abajo). Toca decidir el toolchain de build y empezar el APK.
 
 ### Cómo conectarse ahora mismo
 
-```
-ssh -i "<scratchpad-sesion-actual>\radio_key2" -p 8022 -o BatchMode=yes root@192.168.2.57
-```
-
-(Termux SSH acepta cualquier nombre de usuario en el login SSH; el shell real siempre
-es `u0_a83`. La llave privada `radio_key2` NO tiene passphrase — se generó fresca
-porque la primera llave, `radio_key` en la sesión anterior, quedó con passphrase
-desconocida y ya no sirve.)
-
-Pública instalada en el radio (`~/.ssh/authorized_keys` de Termux, usuario `u0_a83`):
+Llave (sin passphrase): `radio_key2` / `radio_key2.pub` en el scratchpad de la sesión.
+Pública:
 ```
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ7hM7QJe0eYv28jsYu1uhTxEZHDUvP8Ml9uVHUHe4JZ claude-radio-s2000-2
 ```
 
-### Por qué SimpleSSHD (puerto 2222) no sirvió al final
+**Vía A — SimpleSSHD (puerto 2222):**
+```
+ssh -i "<scratchpad>\radio_key2" -p 2222 -o BatchMode=yes user@192.168.2.57
+```
+Instalada en `/data/user/0/org.galexander.sshd/files/authorized_keys` (ver bug de ruta abajo).
+
+**Vía B — Termux (puerto 8022):**
+```
+ssh -i "<scratchpad>\radio_key2" -p 8022 -o BatchMode=yes root@192.168.2.57
+```
+Termux SSH acepta cualquier nombre de usuario en el login; el shell real siempre es
+`u0_a83`. Instalada en `~/.ssh/authorized_keys` de Termux.
+
+Nota: las dos apps corren en sandboxes Android separados (UIDs distintos, sin root) —
+no se puede tocar los archivos de una desde una sesión SSH en la otra. Cada vía se
+arregló por separado, entrando por su propia OTP.
+
+### Historial del bloqueo con SimpleSSHD (ya resuelto, dejar como referencia)
 
 1. Usuario correcto = `user` (confirmado).
 2. La OTP se genera **por conexión entrante**, no por intervalo de tiempo — cada
    intento nuevo rota la password, así que hay que leerla y usarla en la MISMA
-   conexión (no reconectar). Se resolvió con un script que abre el socket y espera
+   conexión (no reconectar). Se resuelve con un script que abre el socket y espera
    a que el usuario lea la pantalla antes de mandar el password.
 3. Bug real: la ruta de `authorized_keys` NO es `$HOME/.ssh/authorized_keys` sino
    literalmente `<SSH Path>/authorized_keys` (sin subcarpeta `.ssh`), donde
    `SSH Path` es un ajuste configurable en Settings → Dropbear → Paths, y por
    default vale `/data/user/0/org.galexander.sshd/files` (visible también en el
-   menú "Copy App-private Path"). Instalar ahí SÍ hizo que el servidor reconociera
-   la llave — pero...
+   menú "Copy App-private Path").
 4. Una vez que SimpleSSHD detecta que existe `authorized_keys`, **deja de generar
-   OTP para cualquier conexión**, incluidas las que solo intentan password. Y la
-   llave `radio_key` que se había generado en la sesión anterior resultó tener
-   passphrase (nunca registrada) — quedamos sin password Y sin llave usable.
-   Conclusión: **no vale la pena volver a SimpleSSHD**; usar Termux es más simple
-   y ya está andando.
+   OTP para cualquier conexión**, incluidas las que solo intentan password. La
+   primera llave generada (`radio_key`, sesión anterior) resultó tener passphrase
+   desconocida y quedó inservible — solución: **Settings → "..." → Reset Keys**
+   en la app (borra el `authorized_keys` viejo, vuelve a pedir OTP), y reinstalar
+   con una llave nueva sin passphrase (`radio_key2`). Guardar esto para la próxima
+   vez que haga falta reinstalar la llave ahí.
 
 ---
 
