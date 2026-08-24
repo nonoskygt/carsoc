@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Solo se piden los eventos de ventana que hacen falta para ver aparecer el
+  dialogo del instalador. No se piden pulsaciones de teclas ni se activa
+  flagRetrieveInteractiveWindows: cuanto menos alcance, mejor.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="200"
+    android:description="@string/a11y_description"
+    android:packageNames="com.android.packageinstaller,com.google.android.packageinstaller,com.android.permissioncontroller" />

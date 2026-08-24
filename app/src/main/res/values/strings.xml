@@ -11,4 +11,6 @@
     <string name="paired_with">Emparejado con %1$s</string>
     <string name="pair_failed">No se pudo emparejar. Revisa que el adaptador esté encendido.</string>
     <string name="nothing_found">No apareció ningún dispositivo</string>
+    <string name="a11y_label">S2000 Dash — instalar actualizaciones</string>
+    <string name="a11y_description">Confirma automáticamente el diálogo de instalación cuando S2000 Dash se actualiza, para que el radio no necesite que nadie lo toque. Solo actúa sobre instalaciones de esta app.</string>
 </resources>

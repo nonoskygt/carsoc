@@ -24,6 +24,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.nonosky.s2000dash.bt.ObdPairing
+import com.nonosky.s2000dash.debug.DebugServer
+import com.nonosky.s2000dash.selfupdate.UpdateChecker
 import com.nonosky.s2000dash.obd.PollScheduler
 import com.nonosky.s2000dash.obd.SppTransport
 import com.nonosky.s2000dash.ui.DashView
@@ -45,6 +47,9 @@ class DashActivity : ComponentActivity() {
 
     private var pairing: ObdPairing? = null
     private var pickerDialog: AlertDialog? = null
+
+    private val updater by lazy { UpdateChecker(applicationContext) }
+    private var debugServer: DebugServer? = null
 
     /** El adaptador elegido, para poder arrancar y parar con el ciclo de vida. */
     private var chosen: BluetoothDevice? = null
@@ -83,6 +88,15 @@ class DashActivity : ComponentActivity() {
         dashView = DashView(this)
         setContentView(dashView)
 
+        // Puente de diagnostico: sin root no hay screencap ni logcat ajeno,
+        // asi que sin esto la unica forma de saber que hace el tablero seria
+        // que alguien le tome una foto a la pantalla.
+        debugServer = DebugServer(
+            stateProvider = { scheduler?.state?.value ?: VehicleState() },
+            viewProvider = { dashView },
+            updaterProvider = { updater },
+        ).also { it.start() }
+
         // Mantener presionado para cambiar de adaptador: la unica
         // configuracion que existe, escondida donde no estorba al manejar.
         dashView.setOnLongClickListener {
@@ -120,9 +134,14 @@ class DashActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         chosen?.let { beginPolling(it) }
+        // Revisar si hay version nueva al abrir. Va en un hilo aparte: hace
+        // red y no puede tocar el hilo principal.
+        Thread { runCatching { updater.checkAndInstall() } }.start()
     }
 
     override fun onDestroy() {
+        debugServer?.stop()
+        debugServer = null
         pickerDialog?.dismiss()
         pickerDialog = null
         pairing?.stop()
