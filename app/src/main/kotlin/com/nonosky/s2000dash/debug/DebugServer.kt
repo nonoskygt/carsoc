@@ -187,6 +187,38 @@ class DebugServer(
                 }
                 "/confirmador" -> sendText(out, 200, "text/plain",
                     EstadoActual.loQueDiceElConfirmador().joinToString(SALTO))
+                "/ble" -> {
+                    // Barrido LE, que es OTRA radio que la del barrido clasico
+                    // de /buscar. Un aparato BLE no aparece en /buscar por mucho
+                    // que este encendido a un palmo de distancia.
+                    val seg = consulta["segundos"]?.toIntOrNull() ?: 10
+                    val lista = runCatching { EstadoActual.barrerBle?.invoke(seg) }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro el barrido BLE")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/gatt" -> {
+                    val mac = consulta["mac"]
+                    val seg = consulta["segundos"]?.toIntOrNull() ?: 12
+                    val lista = if (mac.isNullOrBlank()) listOf("falta mac")
+                    else runCatching { EstadoActual.volcarGatt?.invoke(mac, seg) }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro el volcado GATT")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/usb" -> {
+                    val lista = runCatching { EstadoActual.listarUsb?.invoke() }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro el listado USB")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/bluetooth" -> {
+                    // Se ha visto la pila de este radio apagarse sola tras
+                    // varios emparejamientos fallidos. Sin esta ruta, cada vez
+                    // que pasa hay que ir al carro a encenderlo a mano.
+                    val encender = consulta["on"] != "0"
+                    val res = runCatching { EstadoActual.encenderBluetooth?.invoke(encender) }
+                        .getOrNull() ?: "ERROR: el servicio no registro el control de Bluetooth"
+                    sendText(out, 200, "application/json",
+                        """{"resultado":${org.json.JSONObject.quote(res)}}""")
+                }
                 "/" -> sendText(out, 200, "text/plain", HELP)
                 else -> sendText(out, 404, "text/plain", "no existe: $path")
             }
@@ -330,6 +362,10 @@ class DebugServer(
               /buscar       barre el aire en busca de adaptadores
               /emparejar?mac=  empareja y elige
               /olvidar      olvida el adaptador guardado
+              /bluetooth?on=1  enciende (o apaga con on=0) la radio Bluetooth
+              /ble?segundos=10 barrido Bluetooth LE con el anuncio crudo
+              /gatt?mac=       servicios y caracteristicas de un aparato BLE
+              /usb             lo que hay colgado del USB (VID, PID, endpoints)
         """.trimIndent()
     }
 }

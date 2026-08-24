@@ -18,9 +18,16 @@ class Elm327Session(private val transport: ObdTransport) {
     /**
      * Lleva el adaptador a un estado conocido y fija el protocolo.
      *
-     * `ATSP3` es una apuesta a que el AP1 usa ISO 9141-2 (riesgo R5). Si la
-     * apuesta falla, `ATDP` lo delata y caemos a `ATSP0` automatico, dejando
-     * registrado el protocolo real que se negocio.
+     * `ATSP5` es **ISO 14230-4 KWP con inicio rapido**, y ya no es una
+     * apuesta: se midio en vivo contra el AP1 con un ELM327 y una app de
+     * diagnostico, que reporto textualmente "ISO 14230-4 (inic. rapida)"
+     * mientras leia RPM, agua, MAP y sondas.
+     *
+     * Antes aqui iba `ATSP3` (ISO 9141-2), heredado de una suposicion del
+     * diseño que resulto falsa. Costaba el primer intento de cada conexion:
+     * fijaba un protocolo que el carro no habla, `probeBus` fallaba, y solo
+     * entonces caia a `ATSP0`. Si `ATSP5` fallara —otro carro, otro año— el
+     * fallback automatico sigue ahi.
      */
     fun initialize(): ProtocolInfo {
         // ATZ resetea el adaptador entero; tarda bastante mas que el resto.
@@ -29,7 +36,7 @@ class Elm327Session(private val transport: ObdTransport) {
         send("ATL0")   // sin saltos de linea extra
         send("ATS0")   // sin espacios: menos bytes sobre un enlace lento
         send("ATH0")   // sin encabezados: no se necesitan
-        send("ATSP3")  // ISO 9141-2 explicito, evita el barrido de autodeteccion
+        send("ATSP5")  // ISO 14230-4 KWP inicio rapido: medido en el AP1
         send("ATAT1")  // temporizacion adaptativa
 
         var described = send("ATDP", RESET_TIMEOUT_MS).cleaned()
@@ -39,7 +46,7 @@ class Elm327Session(private val transport: ObdTransport) {
         // el PID que mas nos importa: si no contesta, el protocolo fijado no
         // sirve y vale mas dejar que el adaptador lo busque solo.
         if (!probeBus()) {
-            Log.w(TAG, "ISO 9141-2 no respondio; cayendo a ATSP0 automatico")
+            Log.w(TAG, "ISO 14230-4 no respondio; cayendo a ATSP0 automatico")
             send("ATSP0")
             fallback = true
             probeBus()

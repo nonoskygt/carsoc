@@ -8,3 +8,6 @@ local.properties
 *.iml
 captures/
 .cxx/
+
+# Basura de herramientas, no del proyecto.
+.playwright-mcp/

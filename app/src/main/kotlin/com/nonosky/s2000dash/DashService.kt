@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.nonosky.s2000dash.debug.DebugServer
+import com.nonosky.s2000dash.descubrimiento.Descubridor
 import com.nonosky.s2000dash.selfupdate.UpdateChecker
 import kotlin.concurrent.thread
 
@@ -44,9 +45,41 @@ class DashService : Service() {
             updaterProvider = { actualizador },
         ).also { it.start() }
 
+        registrarDescubrimiento()
+
         vivo = true
         arrancarRevisionPeriodica()
         Log.i(TAG, "Servicio arriba")
+    }
+
+    /**
+     * El descubrimiento vive AQUI, no en la pantalla.
+     *
+     * El emparejamiento OBD se registra desde la Activity porque necesita
+     * mostrar la lista al usuario. Estas fuentes no: la bateria y el TPMS
+     * hay que poder buscarlos con el tablero cerrado, desde la laptop, sin
+     * que nadie toque el radio. Colgarlas de la Activity las mataria en
+     * cuanto el usuario abriera otra app — el mismo error que ya dejo al
+     * radio incomunicado una vez.
+     */
+    private fun registrarDescubrimiento() {
+        val ctx = applicationContext
+        val adapter = runCatching {
+            (getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
+        }.getOrNull()
+
+        EstadoActual.barrerBle = { segundos ->
+            Descubridor.barrerBle(ctx, adapter, segundos)
+        }
+        EstadoActual.volcarGatt = { mac, segundos ->
+            Descubridor.volcarGatt(ctx, adapter, mac, segundos)
+        }
+        EstadoActual.listarUsb = {
+            Descubridor.listarUsb(ctx)
+        }
+        EstadoActual.encenderBluetooth = { encender ->
+            Descubridor.encenderBluetooth(adapter, encender)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

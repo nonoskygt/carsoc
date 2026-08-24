@@ -50,6 +50,13 @@
     </queries>
 
     <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
+    <!-- La bateria de litio habla Bluetooth LE, que es otra radio que la
+         clasica del adaptador OBD. Sin required: si un head unit no la trae,
+         el resto del tablero sigue sirviendo. -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- El receptor TPMS cuelga del USB. Enumerar no pide permiso; solo
+         abrir el aparato lo pide. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:allowBackup="true"

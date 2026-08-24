@@ -72,6 +72,34 @@ object EstadoActual {
     @Volatile
     var armarPin: ((String) -> Unit)? = null
 
+    /**
+     * Barrido Bluetooth LE, con el anuncio crudo de cada hallazgo.
+     *
+     * Aparte del barrido clasico a proposito: son dos radios distintas. Un
+     * `startDiscovery()` no ve un aparato BLE por mucho que este ahi, que es
+     * exactamente por que la bateria de litio nunca aparecio en la lista.
+     */
+    @Volatile
+    var barrerBle: ((Int) -> List<String>)? = null
+
+    /** Vuelca servicios y caracteristicas de un aparato BLE por GATT. */
+    @Volatile
+    var volcarGatt: ((String, Int) -> List<String>)? = null
+
+    /** Lo que hay colgado del USB, con VID, PID, interfaces y endpoints. */
+    @Volatile
+    var listarUsb: (() -> List<String>)? = null
+
+    /**
+     * Enciende o apaga la radio Bluetooth del head unit.
+     *
+     * No es un lujo: tras reiniciar el carro queda apagada, y se ha visto
+     * apagarse sola tras varios emparejamientos fallidos. Sin esto hay que
+     * ir fisicamente al carro.
+     */
+    @Volatile
+    var encenderBluetooth: ((Boolean) -> String)? = null
+
     /** Lo ultimo que conto el confirmador sobre lo que ve en pantalla. */
     private val dichos = java.util.concurrent.CopyOnWriteArrayList<String>()
 

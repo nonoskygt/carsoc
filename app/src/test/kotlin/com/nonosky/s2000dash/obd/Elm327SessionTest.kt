@@ -15,9 +15,9 @@ class Elm327SessionTest {
         put("ATL0", "OK")
         put("ATS0", "OK")
         put("ATH0", "OK")
-        put("ATSP3", "OK")
+        put("ATSP5", "OK")
         put("ATAT1", "OK")
-        put("ATDP", "ISO 9141-2")
+        put("ATDP", "ISO 14230-4 KWP FAST")
         put("010C", "410C1AF8")
         putAll(extra)
     }
@@ -27,19 +27,19 @@ class Elm327SessionTest {
         val t = FakeTransport(okScript())
         Elm327Session(t).initialize()
 
-        val esperado = listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP3", "ATAT1", "ATDP")
+        val esperado = listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP5", "ATAT1", "ATDP")
         assertEquals(esperado, t.written.take(esperado.size))
     }
 
     @Test
     fun `reporta el protocolo que dijo ATDP`() {
         val info = Elm327Session(FakeTransport(okScript())).initialize()
-        assertEquals("ISO 9141-2", info.describedAs)
+        assertEquals("ISO 14230-4 KWP FAST", info.describedAs)
         assertFalse(info.usedFallback)
     }
 
     @Test
-    fun `si ISO 9141-2 no contesta cae a ATSP0 automatico`() {
+    fun `si ISO 14230-4 no contesta cae a ATSP0 automatico`() {
         // El bus no responde con el protocolo fijado a mano...
         var probes = 0
         val t = object : ObdTransport {
@@ -56,7 +56,7 @@ class Elm327SessionTest {
                         // ...pero si contesta despues de ATSP0.
                         if (probes == 1) "NO DATA" else "410C1AF8"
                     }
-                    cmd == "ATDP" -> if (probes >= 2) "AUTO, ISO 15765-4" else "ISO 9141-2"
+                    cmd == "ATDP" -> if (probes >= 2) "AUTO, ISO 15765-4" else "ISO 14230-4 KWP FAST"
                     else -> "OK"
                 }
             }
