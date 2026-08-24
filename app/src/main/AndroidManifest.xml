@@ -38,6 +38,8 @@
     <!-- Abrir el tablero al encender el carro; si no, tras cada reinicio
          nadie revisa si hay actualizacion hasta que alguien toque el icono. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <!-- Para armar el APK confirmador. Nivel "signature": solo funciona
          porque ambos APK llevan el mismo certificado. -->
@@ -69,6 +71,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Sostiene el puente de diagnostico y la revision de
+             actualizaciones aunque el tablero no este en pantalla. -->
+        <service
+            android:name=".DashService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <receiver
             android:name=".BootReceiver"

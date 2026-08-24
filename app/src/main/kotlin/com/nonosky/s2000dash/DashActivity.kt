@@ -24,7 +24,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.nonosky.s2000dash.bt.ObdPairing
-import com.nonosky.s2000dash.debug.DebugServer
 import com.nonosky.s2000dash.selfupdate.UpdateChecker
 import com.nonosky.s2000dash.obd.PollScheduler
 import com.nonosky.s2000dash.obd.SppTransport
@@ -49,7 +48,6 @@ class DashActivity : ComponentActivity() {
     private var pickerDialog: AlertDialog? = null
 
     private val updater by lazy { UpdateChecker(applicationContext) }
-    private var debugServer: DebugServer? = null
     private val revisoActualizacion = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** El adaptador elegido, para poder arrancar y parar con el ciclo de vida. */
@@ -89,14 +87,12 @@ class DashActivity : ComponentActivity() {
         dashView = DashView(this)
         setContentView(dashView)
 
-        // Puente de diagnostico: sin root no hay screencap ni logcat ajeno,
-        // asi que sin esto la unica forma de saber que hace el tablero seria
-        // que alguien le tome una foto a la pantalla.
-        debugServer = DebugServer(
-            stateProvider = { scheduler?.state?.value ?: VehicleState() },
-            viewProvider = { dashView },
-            updaterProvider = { updater },
-        ).also { it.start() }
+        // El puente de diagnostico y la revision de actualizaciones viven en
+        // un servicio, no aqui: metidos en la pantalla se morian en cuanto el
+        // usuario abria otra app, y el radio dejaba de ser alcanzable justo
+        // cuando mas falta hacia.
+        EstadoActual.vista = dashView
+        DashService.arrancar(this)
 
         // Mantener presionado para cambiar de adaptador: la unica
         // configuracion que existe, escondida donde no estorba al manejar.
@@ -158,8 +154,10 @@ class DashActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        debugServer?.stop()
-        debugServer = null
+        // Soltar la vista para que no la retenga el servicio. El puente
+        // seguira contestando el estado; solo dejara de haber captura, que
+        // es la verdad: sin pantalla no hay nada que fotografiar.
+        if (EstadoActual.vista === dashView) EstadoActual.vista = null
         pickerDialog?.dismiss()
         pickerDialog = null
         pairing?.stop()
@@ -312,7 +310,12 @@ class DashActivity : ComponentActivity() {
         observeJob?.cancel()
         observeJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                target.state.collect { dashView.setState(it) }
+                target.state.collect {
+                    dashView.setState(it)
+                    // Publicarlo para que el puente lo vea aunque esta
+                    // pantalla se destruya despues.
+                    EstadoActual.ultimo = it
+                }
             }
         }
     }

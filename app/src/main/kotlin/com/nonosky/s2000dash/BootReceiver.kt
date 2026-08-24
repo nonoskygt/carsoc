@@ -24,6 +24,10 @@ class BootReceiver : BroadcastReceiver() {
         val accion = intent.action ?: return
         Log.i(TAG, "Recibido $accion; levantando el tablero")
 
+        // El servicio primero: aunque el fabricante bloquee abrir pantallas
+        // desde segundo plano, el puente y las actualizaciones quedan vivos.
+        DashService.arrancar(context)
+
         val abrir = Intent(context, DashActivity::class.java).apply {
             // Desde un receiver no hay actividad de origen.
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
