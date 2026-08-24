@@ -34,7 +34,32 @@ data class BateriaState(
 
     val enlace: EnlaceBateria = EnlaceBateria.SinDongle,
     val detalle: String? = null,
+
+    /**
+     * Todas las BMS oidas en la ultima ronda, no solo la elegida.
+     *
+     * Hace falta porque el aire tiene mas de una: junto a la del carro se oye
+     * la de una bicicleta, tambien JBD y tambien con servicio 0xFF00. Sin
+     * verlas todas, elegir mal es invisible — y se estuvo leyendo la de la
+     * bici durante un rato sin que nada lo delatara.
+     */
+    val candidatas: List<String> = emptyList(),
 ) {
+
+    /**
+     * Potencia en vatios, con signo: positivo entra, negativo sale.
+     *
+     * Se pide asi porque un amperaje sin voltaje no dice cuanta energia se
+     * mueve de verdad. 40 A a 13 V son 520 W; los mismos 40 A a 48 V serian
+     * 1920 W. El vatio es la magnitud que se puede comparar con cualquier
+     * otra cosa del carro.
+     */
+    val potenciaW: Float?
+        get() {
+            val v = voltaje ?: return null
+            val a = corrienteA ?: return null
+            return v * a
+        }
 
     fun detectada(): Boolean = mac != null
 

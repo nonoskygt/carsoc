@@ -283,34 +283,94 @@ class DashView @JvmOverloads constructor(
      * hace que nadie vuelva a creerle al tablero.
      */
     private fun dibujarBateria(canvas: Canvas, left: Float, ancho: Float, alto: Float, ahora: Long) {
-        val margen = ancho * 0.08f
+        val margen = ancho * 0.06f
         val x0 = left + margen
         val x1 = left + ancho - margen
+        val cx = left + ancho * 0.5f
+        val rancia = bateria.rancia(ahora)
 
         labelPaint.textAlign = Paint.Align.CENTER
         labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = alto * 0.13f
-        canvas.drawText(tituloBateria(ahora), left + ancho * 0.5f, alto * 0.20f, labelPaint)
+        labelPaint.textSize = alto * 0.115f
+        canvas.drawText(tituloBateria(ahora), cx, alto * 0.15f, labelPaint)
 
-        val rancia = bateria.rancia(ahora)
+        // Lo que el dueño pidio ver: **porcentaje y vatios**, los dos grandes y
+        // uno a cada lado. El voltaje baja a la linea de abajo — es el dato que
+        // menos decide: 13.3 V no dice si la bateria se esta llenando o
+        // vaciando, y 520 W si.
+        val soc = bateria.soc
+        val w = bateria.potenciaW
 
-        // Voltaje grande cuando exista; hasta entonces, guiones grandes. El
-        // tamaño se reserva ya para que el dia que llegue el dato no se mueva
-        // nada de sitio.
-        textPaint.color = if (bateria.voltaje == null || rancia) COLOR_STALE else COLOR_GREEN
-        textPaint.textSize = alto * 0.40f
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = alto * 0.34f
+        textPaint.color = if (soc == null || rancia) COLOR_STALE else colorSoc(soc, rancia)
+        canvas.drawText(soc?.let { "$it%" } ?: "--%", x0, alto * 0.47f, textPaint)
+
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.color = when {
+            w == null || rancia -> COLOR_STALE
+            w > 5f -> COLOR_GREEN
+            w < -5f -> COLOR_AMBER
+            else -> COLOR_TEXT_DIM
+        }
+        // El numero se encoge si no cabe: mil y pico vatios son cuatro digitos
+        // y un tablero no puede recortar una cifra en silencio.
+        val textoW = w?.let { "%+.0f W".format(it) } ?: "-- W"
+        textPaint.textSize = alto * 0.34f
+        val maximo = ancho * 0.52f
+        val medido = textPaint.measureText(textoW)
+        if (medido > maximo) textPaint.textSize *= maximo / medido
+        canvas.drawText(textoW, x1, alto * 0.47f, textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+
+        // Barra del SoC: un porcentaje se entiende de un vistazo como barra.
+        val barTop = alto * 0.56f
+        val barH = alto * 0.085f
+        barPaint.color = COLOR_CAJA
+        canvas.drawRoundRect(x0, barTop, x1, barTop + barH, barH / 2, barH / 2, barPaint)
+        if (soc != null) {
+            barPaint.color = colorSoc(soc, rancia)
+            canvas.drawRoundRect(
+                x0, barTop, x0 + (x1 - x0) * (soc / 100f).coerceIn(0f, 1f),
+                barTop + barH, barH / 2, barH / 2, barPaint,
+            )
+        }
+
+        // Tercera linea: voltaje, temperatura y sentido, cada uno en su sitio
+        // fijo. Antes iban dos textos centrados en la misma altura y se
+        // pisaban — ilegibles justo cuando habia datos que leer.
+        labelPaint.textSize = alto * 0.115f
+        labelPaint.textAlign = Paint.Align.LEFT
+        labelPaint.color = if (bateria.voltaje == null || rancia) COLOR_STALE else COLOR_TEXT
         canvas.drawText(
-            bateria.voltaje?.let { String.format("%.2f V", it) } ?: "-- V",
-            left + ancho * 0.5f, alto * 0.60f, textPaint,
+            bateria.voltaje?.let { "%.2f V".format(it) } ?: "-- V",
+            x0, alto * 0.80f, labelPaint,
         )
 
-        labelPaint.textSize = alto * 0.115f
-        labelPaint.color = COLOR_TEXT_DIM
-        canvas.drawText(pieBateria(), left + ancho * 0.5f, alto * 0.78f, labelPaint)
+        labelPaint.textAlign = Paint.Align.RIGHT
+        labelPaint.color = colorTemperaturaBateria(bateria.temperaturaC, rancia)
+        canvas.drawText(
+            bateria.temperaturaC?.let { "$it °C" } ?: "-- °C",
+            x1, alto * 0.80f, labelPaint,
+        )
 
-        // Fila fina con SoC y temperatura: reservadas igual que el voltaje.
-        fila(canvas, x0, x1, alto * 0.95f, alto * 1.9f, "SoC",
-            bateria.soc?.let { "$it %" } ?: "-- %", bateria.soc == null, COLOR_TEXT)
+        labelPaint.textAlign = Paint.Align.CENTER
+        labelPaint.color = COLOR_TEXT_DIM
+        labelPaint.textSize = alto * 0.10f
+        canvas.drawText(pieBateria(), cx, alto * 0.95f, labelPaint)
+    }
+
+    /**
+     * La temperatura de una LiFePO4 no es decoracion.
+     *
+     * Cargar por encima de 45 grados degrada las celdas, y muchos BMS cortan
+     * ahi. Se pinta ambar antes y rojo despues para que se vea sin leer.
+     */
+    private fun colorTemperaturaBateria(t: Int?, rancia: Boolean): Int = when {
+        t == null || rancia -> COLOR_STALE
+        t >= 45 -> if (parpadeo()) COLOR_REDLINE else COLOR_AMBER
+        t >= 40 -> COLOR_AMBER
+        else -> COLOR_TEXT
     }
 
     private fun tituloBateria(ahora: Long): String = when (bateria.enlace) {
@@ -332,10 +392,28 @@ class DashView @JvmOverloads constructor(
      */
     private fun pieBateria(): String {
         if (!bateria.detectada()) return bateria.detalle ?: "no localizada"
-        if (bateria.voltaje != null) return bateria.nombre ?: "BMS"
+        if (bateria.voltaje != null) {
+            val celdas = bateria.celdas.size
+            return if (celdas > 0) "$celdas celdas · ${bateria.nombre ?: "BMS"}"
+            else (bateria.nombre ?: "BMS")
+        }
         val señal = bateria.rssi?.let { " · ${it} dBm" } ?: ""
         return "detectada$señal · falta leer el BMS"
     }
+
+
+    /**
+     * Umbrales de una **LiFePO4**, que es lo que resulto ser: 4 celdas a
+     * 3.3 V. Importa la quimica: una Li-ion de 4 celdas daria 14.8 V
+     * nominales y los mismos umbrales gritarian sin motivo todo el tiempo.
+     */
+    private fun colorSoc(soc: Int, rancia: Boolean): Int = when {
+        rancia -> COLOR_STALE
+        soc <= 15 -> if (parpadeo()) COLOR_REDLINE else COLOR_AMBER
+        soc <= 35 -> COLOR_AMBER
+        else -> COLOR_GREEN
+    }
+
 
     // --- Columna libre ------------------------------------------------------
 

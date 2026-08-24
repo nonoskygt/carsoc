@@ -43,6 +43,7 @@
                 <action android:name="com.nonosky.s2000dash.ARMAR_INSTALACION" />
                 <action android:name="com.nonosky.s2000dash.DESARMAR_INSTALACION" />
                 <action android:name="com.nonosky.s2000dash.ARMAR_PIN" />
+                <action android:name="com.nonosky.s2000dash.MANDO" />
             </intent-filter>
         </receiver>
 

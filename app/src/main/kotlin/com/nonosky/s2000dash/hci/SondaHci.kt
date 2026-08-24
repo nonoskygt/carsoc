@@ -19,7 +19,11 @@ object SondaHci {
      * cuestion de escribir mas comandos. Si no contesta al Reset, esta via
      * esta cerrada y hay que decirlo sin rodeos.
      */
-    fun interrogar(context: Context, vid: Int? = null, pid: Int? = null): List<String> {
+    fun interrogar(context: Context, vid: Int? = null, pid: Int? = null): List<String> =
+        DuenoDongle.usar("sonda-hci", esperaMs = 4_000) { interrogarConDongle(context, vid, pid) }
+            ?: listOf("el dongle lo tiene " + (DuenoDongle.ocupadoPor() ?: "otro"))
+
+    private fun interrogarConDongle(context: Context, vid: Int?, pid: Int?): List<String> {
         val um = context.getSystemService(Context.USB_SERVICE) as? UsbManager
             ?: return listOf("ERROR: este radio no expone UsbManager")
 
@@ -147,6 +151,17 @@ object SondaHci {
         pid: Int? = null,
         activo: Boolean = false,
         crudo: Boolean = false,
+    ): List<String> = DuenoDongle.usar("barrido-hci", esperaMs = 4_000) {
+        barrerBleConDongle(context, segundos, vid, pid, activo, crudo)
+    } ?: listOf("el dongle lo tiene " + (DuenoDongle.ocupadoPor() ?: "otro"))
+
+    private fun barrerBleConDongle(
+        context: Context,
+        segundos: Int,
+        vid: Int?,
+        pid: Int?,
+        activo: Boolean,
+        crudo: Boolean,
     ): List<String> {
         val um = context.getSystemService(Context.USB_SERVICE) as? UsbManager
             ?: return listOf("ERROR: este radio no expone UsbManager")

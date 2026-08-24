@@ -85,11 +85,15 @@ class TpmsDecoderTest {
     // ========================================================================
 
     @Test
-    fun `HIPOTESIS presion a media libra por unidad cae sobre la placa del AP1`() {
-        // La placa del AP1 pide 32 psi delante y detras (misma presion, aunque
-        // las medidas sean escalonadas). 0x40 da 32.0 clavado y 0x3E da 31.0.
-        // Ninguna otra escala candidata cae cerca: psi directo daria 62-64 psi
-        // (por encima del maximo del flanco) y kPa/2 daria 18 psi (llanta baja).
+    fun `MEDIDO presion a media libra por unidad, contra calibrador digital`() {
+        // El dueño midio las cuatro llantas con un manometro digital: 32 psi
+        // delante y 31 detras. Eso es crudoA/2 exacto para 0x40 y 0x3E.
+        //
+        // Hubo un rodeo: se comparo antes contra la app TPMS nativa del radio,
+        // que muestra 29,7 y 28,7, y se cambio la escala para cuadrar con
+        // ella. Estaba mal — la descalibrada es la nativa. Una segunda
+        // implementacion es una segunda opinion, no una fuente de verdad; la
+        // verdad es un instrumento contra el mundo fisico.
         assertEquals(32.0f, decodificar(T_00).single().presionPsi!!, 0.001f)
         assertEquals(32.0f, decodificar(T_01).single().presionPsi!!, 0.001f)
         assertEquals(31.0f, decodificar(T_10).single().presionPsi!!, 0.001f)
@@ -108,14 +112,22 @@ class TpmsDecoderTest {
     }
 
     @Test
-    fun `HIPOTESIS temperatura con offset 40`() {
-        assertEquals(35, decodificar(T_10).single().temperaturaC)
-        assertEquals(36, decodificar(T_11).single().temperaturaC)
-        assertEquals(37, decodificar(T_00).single().temperaturaC)
-        assertEquals(37, decodificar(T_01).single().temperaturaC)
+    fun `MEDIDO temperatura con offset 50, calibrado contra la app nativa`() {
+        // Estos numeros ya no son una apuesta: son los que muestra la app
+        // TPMS del propio radio (com.syt.tmps) para estas MISMAS tramas,
+        // leidos de su pantalla con el servicio de accesibilidad.
+        //
+        // Antes este test fijaba offset 40 y pasaba, porque comprobaba la
+        // suposicion contra si misma. Daba 37/35 grados donde la nativa dice
+        // 27/25: diez de mas en las cuatro. Una prueba solo vale lo que vale
+        // su referencia, y hasta hoy no habia ninguna.
+        assertEquals(25, decodificar(T_10).single().temperaturaC)
+        assertEquals(26, decodificar(T_11).single().temperaturaC)
+        assertEquals(27, decodificar(T_00).single().temperaturaC)
+        assertEquals(27, decodificar(T_01).single().temperaturaC)
         // La trama rara sale mas caliente que las cuatro ruedas, que es lo
         // propio de una cajita en el tablero al sol.
-        assertEquals(41, decodificar(T_05).single().temperaturaC)
+        assertEquals(31, decodificar(T_05).single().temperaturaC)
     }
 
     @Test
@@ -128,7 +140,8 @@ class TpmsDecoderTest {
 
     @Test
     fun `una presion por debajo del 75 por ciento de la placa si dispara el aviso`() {
-        // 46 unidades = 23.0 psi, justo debajo del umbral de 24.
+        // 46 unidades = 23.0 psi, justo debajo del umbral de 24 (25% bajo los
+        // 32 de placa, criterio FMVSS 138).
         val t = decodificar(tramaCon(id = 0x00, a = 46, b = 77, c = 0)).single()
         assertEquals(23.0f, t.presionPsi!!, 0.001f)
         assertTrue(t.presionBaja)
@@ -567,7 +580,7 @@ class TpmsDecoderTest {
     @Test
     fun `una presion imposible se marca en vez de colarse como normal`() {
         // 200 unidades = 100 psi. Si esto aparece de verdad, lo que esta mal
-        // es PSI_POR_UNIDAD, no la llanta — y hay que verlo, no esconderlo.
+        // es la escala, no la llanta — y hay que verlo, no esconderlo.
         val t = decodificar(tramaCon(id = 0x00, a = 200, b = 77, c = 0)).single()
         assertEquals(100.0f, t.presionPsi!!, 0.001f)
         assertTrue(t.presionFueraDeRango)

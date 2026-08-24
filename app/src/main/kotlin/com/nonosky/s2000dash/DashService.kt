@@ -10,6 +10,9 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import com.nonosky.s2000dash.bateria.CanalGattDisponible
+import com.nonosky.s2000dash.bateria.LectorBmsGatt
+import com.nonosky.s2000dash.bateria.CanalGattHci
 import com.nonosky.s2000dash.bateria.VigilanteBateria
 import com.nonosky.s2000dash.debug.DebugServer
 import com.nonosky.s2000dash.descubrimiento.Descubridor
@@ -94,6 +97,54 @@ class DashService : Service() {
         EstadoActual.barrerBleHci = { segundos, vid, pid, activo, crudo ->
             SondaHci.barrerBle(ctx, segundos, vid, pid, activo, crudo)
         }
+        EstadoActual.mandarAlConfirmador = { comando, a, b, c, d ->
+            runCatching {
+                sendBroadcast(
+                    Intent("com.nonosky.s2000dash.MANDO")
+                        .setPackage("com.nonosky.s2000dash.confirmador")
+                        .putExtra("comando", comando)
+                        .putExtra("a", a)
+                        .putExtra("b", b)
+                        .putExtra("c", c)
+                        .putExtra("d", d)
+                )
+            }.onFailure { Log.w(TAG, "no se pudo mandar '$comando': ${it.message}") }
+        }
+        EstadoActual.probarObdHci = { mac ->
+            val salida = mutableListOf<String>()
+            // El OBD necesita el dongle sin interrupciones: se pausa el
+            // vigilante de la bateria y se le da tiempo a soltarlo. Sin esto,
+            // el OBD pierde todas las carreras contra un vigilante que entra
+            // cada 30 segundos y se queda dentro veinte.
+            val v = EstadoActual.vigilanteBateria
+            v?.pausar()
+            salida += "vigilante de bateria en pausa; esperando que suelte el dongle"
+            var esperas = 0
+            while (com.nonosky.s2000dash.hci.DuenoDongle.ocupadoPor() != null && esperas < 30) {
+                Thread.sleep(1_000); esperas++
+            }
+            salida += "dongle libre tras ${esperas}s"
+            val t = com.nonosky.s2000dash.obd.HciObdTransport(ctx, mac)
+            try {
+                t.connect()
+                salida += t.traza
+                salida += "--- dialogo AT ---"
+                val sesion = com.nonosky.s2000dash.obd.Elm327Session(t)
+                val info = sesion.initialize()
+                salida += "ATDP dijo: ${info.describedAs} (fallback=${info.usedFallback})"
+                salida += "voltaje del adaptador: ${sesion.readVoltage() ?: "n/d"}"
+                salida += "RPM crudo: ${sesion.queryRaw("010C") ?: "sin respuesta"}"
+                salida += "agua crudo: ${sesion.queryRaw("0105") ?: "sin respuesta"}"
+            } catch (e: Exception) {
+                salida += t.traza
+                salida += "ERROR: ${e.javaClass.simpleName}: ${e.message}"
+            } finally {
+                runCatching { t.close() }
+                v?.reanudar()
+                salida += "vigilante de bateria reanudado"
+            }
+            salida
+        }
         EstadoActual.encenderBluetooth = { encender ->
             Descubridor.encenderBluetooth(adapter, encender)
         }
@@ -123,11 +174,38 @@ class DashService : Service() {
      */
     private fun arrancarBateria() {
         runCatching {
+            // Enchufa la capa ACL/L2CAP al lector del BMS. Mientras esto fuera
+            // null, el vigilante sabia que el GATT no estaba cableado y lo
+            // decia en el tablero en vez de fingir que buscaba.
+            CanalGattDisponible.fabrica = { mac ->
+                CanalGattHci.abrir(applicationContext, mac).first
+            }
             val v = VigilanteBateria(applicationContext)
             vigilante = v
             EstadoActual.vigilanteBateria = v
             v.alCambiar = { runCatching { EstadoActual.alCambiarBateria?.invoke() } }
             v.arrancar()
+
+            EstadoActual.leerBmsAhora = { mac ->
+                val salida = mutableListOf<String>()
+                val (canal, traza) = CanalGattHci.abrir(applicationContext, mac)
+                salida += traza
+                if (canal == null) {
+                    salida += "no se pudo abrir el canal GATT"
+                } else {
+                    try {
+                        val lector = LectorBmsGatt(canal)
+                        val lectura = lector.leerTodo()
+                        salida += lectura.traza
+                        salida += lectura.problemas
+                        lectura.basico?.let { salida += "BASICO: $it" }
+                        lectura.celdas?.let { salida += "CELDAS: $it" }
+                    } finally {
+                        runCatching { canal.cerrar() }
+                    }
+                }
+                salida
+            }
         }.onFailure { Log.w(TAG, "vigilante de bateria no arranco: ${it.message}") }
     }
 

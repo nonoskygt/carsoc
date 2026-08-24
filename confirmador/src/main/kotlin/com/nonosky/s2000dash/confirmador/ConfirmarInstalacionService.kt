@@ -16,10 +16,51 @@ class ConfirmarInstalacionService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instancia = this
         Log.i(TAG, "Confirmador conectado")
+        reportar("confirmador CONECTADO y listo para mandos")
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        // Sin limpiar esto, un mando posterior actuaria sobre un servicio ya
+        // desconectado y fallaria sin decir por que. Android desactiva la
+        // accesibilidad al actualizar el APK, asi que esto pasa de verdad.
+        if (instancia === this) instancia = null
+        return super.onUnbind(intent)
     }
 
     override fun onInterrupt() = Unit
+
+    /**
+     * Ejecuta un mando que llego del tablero por difusion.
+     *
+     * Se envuelve entero: una excepcion aqui viaja por el hilo principal del
+     * servicio de accesibilidad y se lleva el proceso, dejando al radio sin
+     * mando y sin manera de recuperarlo en remoto.
+     */
+    fun ejecutarMando(comando: String, a: String?, b: String?, c: String?, d: String?) {
+        runCatching {
+            when (comando) {
+                "volcar" -> Mando.volcar(this).forEach { reportar(it) }
+                "tocar" -> reportar(
+                    Mando.tocar(this, a?.toIntOrNull() ?: 0, b?.toIntOrNull() ?: 0)
+                )
+                "arrastrar" -> reportar(
+                    Mando.arrastrar(
+                        this,
+                        a?.toIntOrNull() ?: 0, b?.toIntOrNull() ?: 0,
+                        c?.toIntOrNull() ?: 0, d?.toIntOrNull() ?: 0,
+                    )
+                )
+                "pulsar" -> reportar(Mando.pulsarTexto(this, a ?: ""))
+                "escribir" -> reportar(Mando.escribir(this, a ?: ""))
+                "accion" -> reportar(Mando.accionGlobal(this, a ?: ""))
+                "abrir" -> reportar(Mando.abrir(this, a ?: ""))
+                "apps" -> Mando.listarApps(this, a).forEach { reportar(it) }
+                else -> reportar("mando desconocido: $comando")
+            }
+        }.onFailure { reportar("ERROR en mando '$comando': ${it.javaClass.simpleName}: ${it.message}") }
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
@@ -239,9 +280,21 @@ class ConfirmarInstalacionService : AccessibilityService() {
         return null
     }
 
-    private companion object {
-        const val TAG = "Confirmador"
+    companion object {
+
+        private const val TAG = "Confirmador"
+
+        /**
+         * El servicio vivo, para que la difusion del mando pueda actuar.
+         *
+         * Un BroadcastReceiver no puede alcanzar de otra forma al servicio de
+         * accesibilidad: no hay binder publico ni manera de instanciarlo. La
+         * pone onServiceConnected y la quita onUnbind.
+         */
+        @Volatile
+        var instancia: ConfirmarInstalacionService? = null
+
         /** Tope de nodos: una ventana rara no nos cuelga. */
-        const val MAX_NODOS = 400
+        private const val MAX_NODOS = 400
     }
 }

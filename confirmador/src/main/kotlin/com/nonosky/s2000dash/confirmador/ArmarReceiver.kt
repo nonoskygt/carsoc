@@ -27,6 +27,26 @@ class ArmarReceiver : BroadcastReceiver() {
                 Armado.desarmarPin()
                 Log.i(TAG, "Desarmado")
             }
+            ACCION_MANDO -> {
+                val servicio = ConfirmarInstalacionService.instancia
+                if (servicio == null) {
+                    // Decirlo en vez de callar: "no pasa nada" no distingue
+                    // entre accesibilidad apagada y mando mal escrito.
+                    Reportero.decir(
+                        context,
+                        "ERROR: el servicio de accesibilidad NO esta activo; " +
+                            "hay que encenderlo en Ajustes"
+                    )
+                } else {
+                    servicio.ejecutarMando(
+                        intent.getStringExtra(EXTRA_COMANDO) ?: "",
+                        intent.getStringExtra(EXTRA_A),
+                        intent.getStringExtra(EXTRA_B),
+                        intent.getStringExtra(EXTRA_C),
+                        intent.getStringExtra(EXTRA_D),
+                    )
+                }
+            }
             ACCION_ARMAR_PIN -> {
                 val pin = intent.getStringExtra(EXTRA_PIN) ?: return
                 val duracion = intent.getLongExtra(EXTRA_DURACION, 90_000L)
@@ -41,6 +61,12 @@ class ArmarReceiver : BroadcastReceiver() {
         const val ACCION_ARMAR = "com.nonosky.s2000dash.ARMAR_INSTALACION"
         const val ACCION_DESARMAR = "com.nonosky.s2000dash.DESARMAR_INSTALACION"
         const val ACCION_ARMAR_PIN = "com.nonosky.s2000dash.ARMAR_PIN"
+        const val ACCION_MANDO = "com.nonosky.s2000dash.MANDO"
+        const val EXTRA_COMANDO = "comando"
+        const val EXTRA_A = "a"
+        const val EXTRA_B = "b"
+        const val EXTRA_C = "c"
+        const val EXTRA_D = "d"
         const val EXTRA_PIN = "pin"
         const val EXTRA_VERSION = "versionCode"
         const val EXTRA_DURACION = "duracionMs"

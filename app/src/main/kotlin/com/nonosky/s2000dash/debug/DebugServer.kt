@@ -209,6 +209,52 @@ class DebugServer(
                         .getOrNull() ?: listOf("ERROR: el servicio no registro el listado USB")
                     sendText(out, 200, "text/plain", lista.joinToString(SALTO))
                 }
+                "/pantalla" -> sendText(out, 200, "text/plain", mando("volcar", null, null, null, null, 2_500))
+                "/tocar" -> sendText(out, 200, "text/plain",
+                    mando("tocar", consulta["x"], consulta["y"], null, null, 1_200))
+                "/arrastrar" -> sendText(out, 200, "text/plain",
+                    mando("arrastrar", consulta["x1"], consulta["y1"],
+                        consulta["x2"], consulta["y2"], 1_500))
+                "/pulsar" -> sendText(out, 200, "text/plain",
+                    mando("pulsar", consulta["texto"], null, null, null, 1_500))
+                "/escribir" -> sendText(out, 200, "text/plain",
+                    mando("escribir", consulta["texto"], null, null, null, 1_500))
+                "/accion" -> sendText(out, 200, "text/plain",
+                    mando("accion", consulta["a"], null, null, null, 1_500))
+                "/abrir" -> sendText(out, 200, "text/plain",
+                    mando("abrir", consulta["paquete"], null, null, null, 2_000))
+                "/apps" -> sendText(out, 200, "text/plain",
+                    mando("apps", consulta["filtro"], null, null, null, 3_000))
+                "/bateria-gatt" -> {
+                    // Conecta AHORA con el BMS y devuelve la traza entera. Es
+                    // la unica forma de depurar una pila Bluetooth escrita a
+                    // mano en un radio sin shell: hay que ver en que escalon
+                    // se cayo, no solo que se cayo.
+                    val mac = consulta["mac"]
+                        ?: EstadoActual.vigilanteBateria?.estado?.mac
+                    val lista = if (mac.isNullOrBlank()) {
+                        listOf("falta mac y el vigilante no ha detectado ninguna bateria todavia")
+                    } else {
+                        runCatching { EstadoActual.leerBmsAhora?.invoke(mac) }
+                            .getOrNull() ?: listOf("ERROR: el servicio no registro la lectura del BMS")
+                    }
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/bateria-fijar" -> {
+                    // Zanja la ambiguedad cuando hay mas de un BMS en el aire.
+                    val mac = consulta["mac"]
+                    EstadoActual.vigilanteBateria?.macFijada = mac
+                    sendText(out, 200, "application/json",
+                        """{"fijada":${org.json.JSONObject.quote(mac ?: "")}}""")
+                }
+                "/obd-hci" -> {
+                    val mac = consulta["mac"] ?: "00:1D:A5:68:98:8B"
+                    val lista = runCatching { EstadoActual.probarObdHci?.invoke(mac) }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro el OBD por HCI")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/dongle" -> sendText(out, 200, "text/plain",
+                    com.nonosky.s2000dash.hci.DuenoDongle.diagnostico().joinToString(SALTO))
                 "/tpms" -> sendText(out, 200, "text/plain", tpmsTexto())
                 "/bateria" -> {
                     val v = EstadoActual.vigilanteBateria
@@ -225,6 +271,11 @@ class DebugServer(
                                 else System.currentTimeMillis() - b.vistaMs)
                             put("voltaje", b.voltaje?.toDouble() ?: JSONObject.NULL)
                             put("soc", b.soc ?: JSONObject.NULL)
+                            put("corrienteA", b.corrienteA?.toDouble() ?: JSONObject.NULL)
+                            put("potenciaW", b.potenciaW?.toDouble() ?: JSONObject.NULL)
+                            put("temperaturaC", b.temperaturaC ?: JSONObject.NULL)
+                            put("celdas", org.json.JSONArray(b.celdas.map { it.toDouble() }))
+                            put("candidatas", org.json.JSONArray(b.candidatas))
                         }.toString(2))
                     }
                 }
@@ -274,6 +325,52 @@ class DebugServer(
                 else -> sendText(out, 404, "text/plain", "no existe: $path")
             }
             out.flush()
+        }
+    }
+
+    /**
+     * Manda algo al confirmador y espera su respuesta.
+     *
+     * El confirmador contesta por difusion, o sea de forma asincrona, asi que
+     * hay que vaciar antes y esperar despues. El plazo se pasa por parametro
+     * porque un volcado de arbol tarda bastante mas que un toque, y esperar
+     * lo mismo para todo o corta respuestas o hace lento lo rapido.
+     */
+    private fun mando(
+        comando: String,
+        a: String?, b: String?, c: String?, d: String?,
+        esperaMs: Long,
+    ): String {
+        val enviar = EstadoActual.mandarAlConfirmador
+            ?: return "el servicio no registro el canal de mando"
+        EstadoActual.olvidarLoDelConfirmador()
+        runCatching { enviar(comando, a, b, c, d) }
+            .onFailure { return "no se pudo difundir el mando: ${it.message}" }
+
+        // Se sondea en vez de esperar el plazo entero: un toque contesta en
+        // 50 ms y no tiene sentido tener el socket parado dos segundos.
+        val hasta = System.currentTimeMillis() + esperaMs
+        var ultimo = 0
+        var quieto = 0
+        while (System.currentTimeMillis() < hasta) {
+            Thread.sleep(120)
+            val n = EstadoActual.loQueDiceElConfirmador().size
+            if (n > 0 && n == ultimo) {
+                // Dos vueltas sin lineas nuevas: ya termino de contestar.
+                if (++quieto >= 3) break
+            } else {
+                quieto = 0
+            }
+            ultimo = n
+        }
+
+        val dicho = EstadoActual.loQueDiceElConfirmador()
+        return if (dicho.isEmpty()) {
+            "SIN RESPUESTA del confirmador.\n" +
+                "Lo mas probable es que su servicio de accesibilidad este apagado: " +
+                "Android lo desactiva cada vez que se actualiza ese APK."
+        } else {
+            dicho.joinToString(SALTO)
         }
     }
 
@@ -466,8 +563,19 @@ class DebugServer(
               /ble?segundos=10 barrido Bluetooth LE con el anuncio crudo
               /gatt?mac=       servicios y caracteristicas de un aparato BLE
               /usb             lo que hay colgado del USB (VID, PID, endpoints)
+              /pantalla        vuelca el arbol de la ventana activa, con coordenadas
+              /tocar?x=&y=     toca un punto de la pantalla
+              /arrastrar?x1=&y1=&x2=&y2=   arrastra
+              /pulsar?texto=   pulsa el nodo que diga ese texto
+              /escribir?texto= escribe en el campo editable que haya
+              /accion?a=atras|inicio|recientes|notificaciones
+              /abrir?paquete=  abre una app
+              /apps?filtro=    lista lo instalado
               /tpms            presiones y temperaturas de las cuatro llantas
               /bateria         estado del BMS de litio por BLE
+              /bateria-gatt?mac=  conecta por GATT y lee el BMS, con traza
+              /obd-hci?mac=    OBD por RFCOMM sobre HCI crudo, con traza
+              /dongle          quien tiene tomado el dongle Bluetooth
               /serial?baudios=19200&segundos=8  vuelca el USB-serial en crudo
               /hci?vid=&pid=   interroga por HCI al dongle Bluetooth USB
               /hci-ble?segundos=12&activo=1&crudo=1  barrido BLE por HCI crudo

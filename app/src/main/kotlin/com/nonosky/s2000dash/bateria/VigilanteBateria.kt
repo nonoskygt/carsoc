@@ -3,6 +3,7 @@ package com.nonosky.s2000dash.bateria
 import android.content.Context
 import android.hardware.usb.UsbManager
 import android.util.Log
+import com.nonosky.s2000dash.hci.DuenoDongle
 import com.nonosky.s2000dash.hci.HciUsb
 import kotlin.concurrent.thread
 
@@ -33,6 +34,25 @@ class VigilanteBateria(private val context: Context) {
     private var vivo = false
     private var hilo: Thread? = null
 
+    /**
+     * Cuando esta en pausa, el vigilante no toca el dongle.
+     *
+     * Hace falta porque el OBD necesita el dongle de forma CONTINUA mientras
+     * dura una sesion AT, y el vigilante lo tomaba cada 30 segundos. Con el
+     * candado a secas el OBD simplemente no llegaba a entrar nunca: perdia
+     * todas las carreras contra un vigilante que ya estaba dentro.
+     *
+     * Pausar es mejor que subir el plazo de espera: esperar mas solo alarga la
+     * carrera, no la gana.
+     */
+    @Volatile
+    var enPausa: Boolean = false
+        private set
+
+    fun pausar() { enPausa = true }
+
+    fun reanudar() { enPausa = false }
+
     fun arrancar() {
         if (vivo) return
         vivo = true
@@ -41,6 +61,10 @@ class VigilanteBateria(private val context: Context) {
         // puente y el actualizador. Ya paso una vez con el DebugServer.
         hilo = thread(name = "vigilante-bateria", isDaemon = true) {
             while (vivo) {
+                if (enPausa) {
+                    dormir(2_000)
+                    continue
+                }
                 runCatching { unaRonda() }
                     .onFailure { Log.w(TAG, "ronda fallida: ${it.message}") }
                 dormir(if (estado.detectada()) ESPERA_DETECTADA_MS else ESPERA_BUSCANDO_MS)
@@ -61,8 +85,22 @@ class VigilanteBateria(private val context: Context) {
         }
     }
 
-    /** Un barrido corto. Se abre el dongle, se barre, se cierra. */
+    /**
+     * Un barrido corto. Se abre el dongle, se barre, se cierra.
+     *
+     * Todo bajo [DuenoDongle]: si el OBD tiene el dongle tomado, esta ronda se
+     * salta sin drama y se reintenta a la siguiente. Antes las dos cosas lo
+     * abrian a la vez, se robaban paquetes del mismo endpoint, y el sintoma
+     * era "el BMS dejo de contestar" — que apunta al BMS y no al conflicto.
+     */
     private fun unaRonda() {
+        val hecho = DuenoDongle.usar("vigilante-bateria", esperaMs = 3_000) { rondaConDongle() }
+        if (hecho == null) {
+            publicar(estado.copy(detalle = "el dongle lo tiene ${DuenoDongle.ocupadoPor() ?: "otro"}"))
+        }
+    }
+
+    private fun rondaConDongle() {
         val um = context.getSystemService(Context.USB_SERVICE) as? UsbManager
             ?: return publicar(estado.copy(enlace = EnlaceBateria.SinDongle, detalle = "sin UsbManager"))
 
@@ -96,28 +134,46 @@ class VigilanteBateria(private val context: Context) {
                 publicar(estado.copy(enlace = EnlaceBateria.Buscando, detalle = null))
             }
 
-            var encontrada = false
+            // Se escucha la ronda ENTERA y se guardan todas, en vez de
+            // quedarse con la primera. Quedarse con la primera hizo que se
+            // leyera la bateria de una BICICLETA durante un rato: tambien es
+            // un BMS JBD, tambien anuncia el servicio 0xFF00, y llegaba antes.
+            val oidas = linkedMapOf<String, Hallazgo>()
             val hasta = System.currentTimeMillis() + BARRIDO_MS
             while (vivo && System.currentTimeMillis() < hasta) {
                 val e = hci.leerEvento(400) ?: continue
                 val hallazgo = interpretarAnuncio(e) ?: continue
-                encontrada = true
+                oidas[hallazgo.mac] = hallazgo
+            }
+
+            val elegida = elegir(oidas.values.toList())
+            val encontrada = elegida != null
+            if (elegida != null) {
                 publicar(
                     estado.copy(
-                        mac = hallazgo.mac,
-                        nombre = hallazgo.nombre ?: estado.nombre,
-                        rssi = hallazgo.rssi,
+                        mac = elegida.mac,
+                        nombre = elegida.nombre ?: estado.nombre,
+                        rssi = elegida.rssi,
                         vistaMs = System.currentTimeMillis(),
                         enlace = EnlaceBateria.Detectada,
                         detalle = null,
+                        candidatas = oidas.values.map {
+                            "${it.mac}  ${it.nombre ?: "(sin nombre)"}  ${it.rssi} dBm" +
+                                if (it.mac == elegida.mac) "  <- elegida" else ""
+                        },
                     )
                 )
-                // Con verla una vez por ronda basta: seguir escuchando gasta
-                // el dongle sin añadir informacion.
-                break
             }
 
             hci.mandarComando(HciUsb.CMD_LE_SET_SCAN_ENABLE, byteArrayOf(0x00, 0x00))
+
+            // Cerrar el barrido antes de conectar: el controlador no puede
+            // barrer y mantener un enlace a la vez de forma fiable.
+            if (encontrada) {
+                runCatching { hci.cerrar() }
+                estado.mac?.let { leerBms(it) }
+                return
+            }
 
             if (!encontrada && estado.detectada() && estado.rancia(System.currentTimeMillis())) {
                 publicar(estado.copy(enlace = EnlaceBateria.Buscando, detalle = "dejo de anunciarse"))
@@ -129,12 +185,94 @@ class VigilanteBateria(private val context: Context) {
         }
     }
 
+    /**
+     * Conecta por GATT y lee el BMS de verdad.
+     *
+     * Va DESPUES del barrido y en su propia apertura del dongle: barrer y
+     * mantener una conexion a la vez no lo admiten muchos controladores, y
+     * mezclarlos deja las dos cosas a medias.
+     *
+     * Envuelto entero, como todo lo que puede tocar el dongle: una excepcion
+     * suelta aqui se lleva el tablero, el puente y el actualizador. Ya paso
+     * una vez por dejar una linea fuera del runCatching.
+     */
+    private fun leerBms(mac: String) {
+        // Ya se entra con el dongle tomado por rondaConDongle: DuenoDongle es
+        // reentrante justo para esto, asi que volver a pedirlo no se abraza a
+        // si mismo.
+        runCatching {
+            val fabrica = CanalGattDisponible.fabrica ?: run {
+                publicar(estado.copy(detalle = "el GATT no esta cableado"))
+                return
+            }
+            val canal = fabrica(mac) ?: run {
+                publicar(estado.copy(detalle = "no se pudo abrir el canal GATT"))
+                return
+            }
+            try {
+                val lectura = LectorBmsGatt(canal).leerTodo()
+                val b = lectura.basico
+                val c = lectura.celdas
+                if (b == null && c == null) {
+                    publicar(estado.copy(detalle = "conectado pero sin datos del BMS"))
+                    return
+                }
+                publicar(
+                    estado.copy(
+                        // El voltaje del 0x03 manda; la suma de celdas del 0x04
+                        // es el respaldo. Si solo llega uno de los dos, se usa
+                        // ese en vez de dejar la pantalla vacia.
+                        voltaje = b?.voltajeV?.toFloat() ?: c?.sumaV?.toFloat(),
+                        soc = b?.soc,
+                        corrienteA = b?.corrienteA?.toFloat(),
+                        temperaturaC = b?.temperaturasC?.maxOrNull()?.toInt(),
+                        celdas = c?.celdasMv?.map { it / 1000f } ?: emptyList(),
+                        vistaMs = System.currentTimeMillis(),
+                        enlace = EnlaceBateria.Leyendo,
+                        detalle = null,
+                    )
+                )
+            } finally {
+                runCatching { canal.cerrar() }
+            }
+        }.onFailure {
+            Log.w(TAG, "leerBms fallo: ${it.message}")
+            runCatching {
+                publicar(estado.copy(detalle = "fallo leyendo el BMS: ${it.javaClass.simpleName}"))
+            }
+        }
+    }
+
     private fun publicar(nuevo: BateriaState) {
         estado = nuevo
         runCatching { alCambiar?.invoke() }
     }
 
     private data class Hallazgo(val mac: String, val nombre: String?, val rssi: Int)
+
+    /**
+     * Cual de las BMS oidas es la del carro.
+     *
+     * Por orden: la que el usuario fijo a mano, la que se llama como el carro,
+     * y si no hay ninguna de las dos, la de señal mas fuerte — que casi
+     * siempre es la que esta a un metro y no la del vecino.
+     *
+     * Antes se tomaba la primera que llegara, y eso no es un criterio: es el
+     * orden en que el aire las puso, que cambia en cada ronda.
+     */
+    private fun elegir(oidas: List<Hallazgo>): Hallazgo? {
+        if (oidas.isEmpty()) return null
+        macFijada?.let { fija ->
+            oidas.firstOrNull { it.mac.equals(fija, ignoreCase = true) }?.let { return it }
+        }
+        oidas.firstOrNull { it.nombre?.contains(NOMBRE_DEL_CARRO, ignoreCase = true) == true }
+            ?.let { return it }
+        return oidas.maxByOrNull { it.rssi }
+    }
+
+    /** MAC fijada a mano por HTTP, para zanjar cualquier ambiguedad. */
+    @Volatile
+    var macFijada: String? = null
 
     /**
      * Saca la bateria de un LE Advertising Report, si es ella.
@@ -206,5 +344,14 @@ class VigilanteBateria(private val context: Context) {
 
         /** Sin detectar, se insiste mas seguido. */
         const val ESPERA_BUSCANDO_MS = 10_000L
+
+        /**
+         * El BMS del carro se anuncia con este nombre.
+         *
+         * Es una comodidad, no una garantia: cualquiera puede renombrar un
+         * BMS. Por eso hay ademas MAC fijable, y por eso se publican todas
+         * las candidatas.
+         */
+        const val NOMBRE_DEL_CARRO = "S2000"
     }
 }

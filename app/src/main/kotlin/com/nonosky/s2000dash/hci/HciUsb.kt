@@ -40,6 +40,33 @@ class HciUsb(
     private var eventos: UsbEndpoint? = null
 
     /**
+     * Los dos BULK: por aqui van los DATOS.
+     *
+     * Sin ellos solo se puede preguntar y escuchar respuestas (comandos y
+     * eventos), que es justo donde se quedo la primera version: se podia
+     * barrer BLE y encontrar la bateria, pero no leerla. Los datos ACL —y por
+     * tanto L2CAP, y por tanto ATT y RFCOMM— viajan por estos endpoints y por
+     * ningun otro.
+     */
+    private var aclEntrada: UsbEndpoint? = null
+    private var aclSalida: UsbEndpoint? = null
+
+    val abierto: Boolean get() = conexion != null
+
+    /** Hay camino de datos, no solo de comandos. */
+    val tieneAcl: Boolean get() = aclEntrada != null && aclSalida != null
+
+    /**
+     * Tamano de bloque del BULK de salida. 64 bytes en este dongle.
+     *
+     * Lo necesita [PaqueteAcl.maxDatosSeguro] para no mandar nunca una
+     * transferencia que sea multiplo exacto de este numero.
+     */
+    val tamBloqueSalida: Int get() = aclSalida?.maxPacketSize ?: 64
+
+    val tamBloqueEntrada: Int get() = aclEntrada?.maxPacketSize ?: 64
+
+    /**
      * Reclama la interfaz HCI del dongle.
      *
      * La interfaz 0 es la del transporte HCI: trae un endpoint de
@@ -69,8 +96,13 @@ class HciUsb(
 
         for (j in 0 until candidata.endpointCount) {
             val e = candidata.getEndpoint(j)
-            if (e.type == UsbConstants.USB_ENDPOINT_XFER_INT && e.direction == UsbConstants.USB_DIR_IN) {
-                eventos = e
+            when {
+                e.type == UsbConstants.USB_ENDPOINT_XFER_INT &&
+                    e.direction == UsbConstants.USB_DIR_IN -> eventos = e
+                e.type == UsbConstants.USB_ENDPOINT_XFER_BULK &&
+                    e.direction == UsbConstants.USB_DIR_IN -> aclEntrada = e
+                e.type == UsbConstants.USB_ENDPOINT_XFER_BULK &&
+                    e.direction == UsbConstants.USB_DIR_OUT -> aclSalida = e
             }
         }
         if (eventos == null) {
@@ -81,8 +113,46 @@ class HciUsb(
 
         conexion = con
         itf = candidata
-        traza += "interfaz HCI reclamada (eventos en endpoint ${eventos?.address})"
+        traza += "interfaz HCI reclamada (eventos en endpoint ${eventos?.address}, " +
+            "maxPacket=${eventos?.maxPacketSize})"
+        // Que falten los BULK no es motivo para no abrir: interrogar y barrer
+        // BLE funcionan solo con comandos y eventos, y eso debe seguir
+        // funcionando aunque este dongle no sirviera para datos.
+        traza += if (tieneAcl) {
+            "camino ACL listo (entrada=${aclEntrada?.address} maxPacket=$tamBloqueEntrada, " +
+                "salida=${aclSalida?.address} maxPacket=$tamBloqueSalida)"
+        } else {
+            "AVISO: sin endpoints BULK completos; hay comandos y eventos pero NO hay datos ACL"
+        }
         return traza
+    }
+
+    /**
+     * Manda un paquete HCI ACL ya armado por el BULK de salida.
+     *
+     * Devuelve los bytes escritos, o negativo si fallo. **No trocea y no
+     * cuenta creditos**: eso es de capas de mas arriba ([PaqueteAcl.trocear] y
+     * [ControlFlujoAcl]). Esta clase es el cable, nada mas.
+     */
+    fun escribirAclCrudo(paquete: ByteArray, timeoutMs: Int = TIMEOUT_MS): Int {
+        val con = conexion ?: return -1
+        val ep = aclSalida ?: return -1
+        return con.bulkTransfer(ep, paquete, paquete.size, timeoutMs)
+    }
+
+    /**
+     * Una lectura del BULK de entrada, sin interpretar.
+     *
+     * Devuelve el trozo tal cual: **puede ser un paquete ACL a medias**,
+     * porque el endpoint entrega como mucho `maxPacketSize` bytes por lectura.
+     * Juntarlos es tarea de [ReensamblaUsb], igual que con los eventos.
+     *
+     * Un retorno nulo NO es un error: es lo normal cuando no hay trafico.
+     */
+    fun leerAclCrudo(buffer: ByteArray, timeoutMs: Int = TIMEOUT_MS): Int {
+        val con = conexion ?: return -1
+        val ep = aclEntrada ?: return -1
+        return con.bulkTransfer(ep, buffer, buffer.size, timeoutMs)
     }
 
     /**
@@ -152,6 +222,8 @@ class HciUsb(
         conexion = null
         itf = null
         eventos = null
+        aclEntrada = null
+        aclSalida = null
     }
 
     companion object {
@@ -184,11 +256,75 @@ class HciUsb(
         const val CMD_LE_SET_SCAN_PARAMS = 0x200B
         const val CMD_LE_SET_SCAN_ENABLE = 0x200C
 
+        /**
+         * Tamano y numero de buffers ACL del pool BR/EDR.
+         *
+         * Hace falta ANTES de mandar un solo paquete de datos: sin saber
+         * cuantos caben no hay control de flujo, y sin control de flujo el
+         * controlador se desborda y deja de contestar.
+         */
+        const val CMD_READ_BUFFER_SIZE = 0x1005
+
+        // --- Enlace LE: lo que hace falta para llegar a la bateria ---
+        const val CMD_LE_CREATE_CONNECTION = 0x200D
+        const val CMD_LE_CREATE_CONNECTION_CANCEL = 0x200E
+        const val CMD_LE_SET_EVENT_MASK = 0x2001
+
+        /** Cierra un enlace. Motivo tipico: 0x13, "terminado por el usuario". */
+        const val CMD_DISCONNECT = 0x0406
+
+        // --- Enlace clasico: lo que hace falta para llegar al ELM327 ---
+        const val CMD_CREATE_CONNECTION = 0x0405
+        const val CMD_ACCEPT_CONNECTION = 0x0409
+        const val CMD_LINK_KEY_REQUEST_REPLY = 0x040B
+        const val CMD_LINK_KEY_REQUEST_NEG_REPLY = 0x040C
+        const val CMD_PIN_CODE_REQUEST_REPLY = 0x040D
+        const val CMD_PIN_CODE_REQUEST_NEG_REPLY = 0x040E
+        const val CMD_AUTH_REQUESTED = 0x0411
+        const val CMD_IO_CAPABILITY_REPLY = 0x042B
+        const val CMD_USER_CONFIRMATION_REPLY = 0x042C
+        const val CMD_WRITE_SCAN_ENABLE = 0x0C1A
+        const val CMD_SET_EVENT_MASK = 0x0C01
+        const val CMD_WRITE_SIMPLE_PAIRING_MODE = 0x0C56
+        const val CMD_REMOTE_NAME_REQUEST = 0x0419
+
         // --- Codigos de evento ---
         const val EVT_COMMAND_COMPLETE = 0x0E
         const val EVT_COMMAND_STATUS = 0x0F
         const val EVT_LE_META = 0x3E
         const val SUBEVT_LE_ADVERTISING_REPORT = 0x02
+
+        /** LE Connection Complete. Trae el handle con el que se habla ACL. */
+        const val SUBEVT_LE_CONNECTION_COMPLETE = 0x01
+
+        /** LE Enhanced Connection Complete: mismo papel, con mas campos. */
+        const val SUBEVT_LE_ENHANCED_CONNECTION_COMPLETE = 0x0A
+
+        /** Connection Complete de un enlace clasico. */
+        const val EVT_CONNECTION_COMPLETE = 0x03
+
+        const val EVT_DISCONNECTION_COMPLETE = 0x05
+        const val EVT_AUTH_COMPLETE = 0x06
+        const val EVT_ENCRYPTION_CHANGE = 0x08
+
+        /**
+         * Number Of Completed Packets: el UNICO permiso para seguir enviando.
+         *
+         * Sin atender este evento el pool de buffers se agota y el
+         * controlador se queda mudo. Ver [ControlFlujoAcl].
+         */
+        const val EVT_NUM_COMPLETED_PACKETS = 0x13
+
+        const val EVT_PIN_CODE_REQUEST = 0x16
+        const val EVT_LINK_KEY_REQUEST = 0x17
+        const val EVT_LINK_KEY_NOTIFICATION = 0x18
+        const val EVT_MAX_SLOTS_CHANGE = 0x1B
+        const val EVT_IO_CAPABILITY_REQUEST = 0x31
+        const val EVT_USER_CONFIRMATION_REQUEST = 0x33
+        const val EVT_SIMPLE_PAIRING_COMPLETE = 0x36
+
+        /** Motivo de desconexion "terminado por el usuario local". */
+        const val RAZON_TERMINADO_LOCAL = 0x13
 
         /** Un dongle Bluetooth se declara con esta clase en su descriptor. */
         const val CLASE_INALAMBRICA = 0xE0

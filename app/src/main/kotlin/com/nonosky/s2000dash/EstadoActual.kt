@@ -111,6 +111,26 @@ object EstadoActual {
     @Volatile
     var vigilanteBateria: com.nonosky.s2000dash.bateria.VigilanteBateria? = null
 
+    /**
+     * Conecta con el BMS y lo lee AHORA, devolviendo la traza paso a paso.
+     *
+     * Es para diagnosticar: una pila Bluetooth escrita a mano falla en algun
+     * escalon concreto —conexion, MTU, descubrimiento, CCCD, checksum— y sin
+     * ver cual, "no lee la bateria" no se puede arreglar.
+     */
+    @Volatile
+    var leerBmsAhora: ((String) -> List<String>)? = null
+
+    /**
+     * Intenta el OBD por HCI crudo contra el dongle USB, y cuenta cada paso.
+     *
+     * Es la via que esquiva la pila Bluetooth rota del radio. Devuelve la
+     * traza completa porque cada escalon —emparejar, L2CAP, SABM, MSC— falla
+     * distinto, y sin ver cual, "no conecta" no se puede arreglar.
+     */
+    @Volatile
+    var probarObdHci: ((String) -> List<String>)? = null
+
     /** La pantalla se registra aqui para repintar cuando cambia la bateria. */
     @Volatile
     var alCambiarBateria: (() -> Unit)? = null
@@ -134,6 +154,17 @@ object EstadoActual {
     /** Barrido BLE hablandole al dongle por HCI, saltandose la pila rota. */
     @Volatile
     var barrerBleHci: ((Int, Int?, Int?, Boolean, Boolean) -> List<String>)? = null
+
+    /**
+     * Prueba el camino de datos ACL/L2CAP contra un aparato real.
+     *
+     * Es lo que distingue "encuentro la bateria" de "leo la bateria": el
+     * barrido solo escucha anuncios, esto abre un enlace y habla ATT por el.
+     * Devuelve la traza paso a paso porque cuando falle habra que saber en
+     * cual de los ocho pasos fue, desde la laptop y sin tocar el radio.
+     */
+    @Volatile
+    var probarAcl: ((String, Int?, Int?, Int) -> List<String>)? = null
 
     /**
      * Abre el USB-serial y vuelca lo que llegue, en crudo.
@@ -163,6 +194,26 @@ object EstadoActual {
     }
 
     fun loQueDiceElConfirmador(): List<String> = dichos.toList()
+
+    /**
+     * Vacia lo que dijo el confirmador.
+     *
+     * Hace falta antes de cada mando: sin esto la respuesta de un volcado
+     * viene mezclada con lo que quedaba de mandos anteriores, y no hay forma
+     * de saber que linea contesta a que pregunta.
+     */
+    fun olvidarLoDelConfirmador() = dichos.clear()
+
+    /**
+     * Manda al confirmador tocar, volcar o abrir algo.
+     *
+     * Es la unica via de controlar la pantalla de este radio: sin root, el
+     * shell no puede `input tap` ni `am start`, y un AccessibilityService es
+     * lo unico que Android deja hacerlo. Lo registra la Activity, que es
+     * quien puede difundir con el permiso de firma.
+     */
+    @Volatile
+    var mandarAlConfirmador: ((String, String?, String?, String?, String?) -> Unit)? = null
 
     /**
      * Referencia debil a la vista del tablero, para poder fotografiarla.

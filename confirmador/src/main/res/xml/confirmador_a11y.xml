@@ -13,5 +13,6 @@
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeNotificationStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
     android:notificationTimeout="200"
     android:description="@string/a11y_description" />

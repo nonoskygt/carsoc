@@ -138,22 +138,39 @@ object Escalas {
     // ===================== HIPOTESIS — de aqui para abajo ==================
 
     /**
-     * HIPOTESIS: byte4 son unidades de media libra.
+     * MEDIDO CON CALIBRADOR DIGITAL: **media libra por cuenta**.
      *
-     * Si el carro resulta tener otra escala, cambia SOLO esta linea:
-     *     kPa/2       -> 2f / 6.89476f
-     *     psi directo -> 1f
-     *     bar/100     -> 14.5038f / 100f
+     * El dueño midio las llantas con un manometro digital y confirmo 32 y 31
+     * psi, que es exactamente crudoA/2 para los crudos 0x40 (64) y 0x3E (62).
+     *
+     * Hubo un rodeo que conviene dejar escrito para no repetirlo. Se comparo
+     * primero contra la app TPMS nativa del radio (com.syt.tmps), que muestra
+     * 29,7 y 28,7 psi, y se "corrigio" la escala a 3.2 kPa por cuenta para
+     * cuadrar con ella. Estaba mal: **la nativa es la que esta descalibrada**,
+     * unas 2.3 psi baja. Tomarla por verdad de referencia fue el error.
+     *
+     * La leccion: una segunda implementacion NO es una fuente de verdad, solo
+     * una segunda opinion. La verdad es un instrumento contra el mundo fisico
+     * — aqui, un calibrador. Cuando las dos discrepan, gana el que toca la
+     * llanta.
      */
     const val PSI_POR_UNIDAD = 0.5f
+    const val KPA_POR_UNIDAD = PSI_POR_UNIDAD * 6.894757f
 
     /**
-     * HIPOTESIS: byte5 es °C desplazado 40, como el resto del automovil.
+     * MEDIDO: °C desplazado **50**, no 40.
      *
-     * Alternativas, en orden de probabilidad: 50, o bien poner esto en 32 y
-     * activar [TEMP_EN_FAHRENHEIT] si resulta que el aparato manda °F.
+     * Calibrado contra la app nativa del radio con las cuatro ruedas a la
+     * vez: crudoB de 77 y 75 dan 27 y 25 grados en la nativa, o sea offset
+     * 50 exacto. La suposicion de 40 —que es el offset habitual del
+     * automovil, y por eso se eligio— daba 37 y 35: diez grados de mas en
+     * las cuatro, sistematicamente.
+     *
+     * El dueño confirmo que la temperatura era LO UNICO que estaba mal, asi
+     * que aqui la nativa si acerto. Que una referencia falle en un campo no
+     * la invalida en otro — pero tampoco la convierte en verdad.
      */
-    const val TEMP_OFFSET = 40
+    const val TEMP_OFFSET = 50
 
     /** HIPOTESIS: si un dia se confirma que byte5 son °F, pon esto en true. */
     const val TEMP_EN_FAHRENHEIT = false
@@ -227,7 +244,15 @@ object Escalas {
         0x11 to Rueda.TraseraDerecha,
     )
 
-    /** Cambiar de hipotesis es cambiar esta palabra. */
+    /**
+     * CONFIRMADO por la app nativa: el nibble alto es el EJE.
+     *
+     * La duda que ninguna captura estatica podia resolver —si {00,01} eran
+     * las delanteras o el lado izquierdo— la contesto la nativa: muestra las
+     * dos delanteras a 29,7 psi y las dos traseras a 28,7, y esos son
+     * exactamente los pares de crudoA {64,64} y {62,62} que traen los ids
+     * {00,01} y {10,11}. Los ids agrupan por EJE.
+     */
     val RUEDA_POR_ID: Map<Int, Rueda> = POR_EJE
 
     /**
