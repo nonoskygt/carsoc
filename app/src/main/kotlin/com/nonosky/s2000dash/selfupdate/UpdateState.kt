@@ -29,6 +29,36 @@ object UpdateState {
     @Synchronized
     fun snapshot(): List<String> = lines.toList()
 
+    /**
+     * Ventana en la que se espera un dialogo de instalacion nuestro.
+     *
+     * El servicio de accesibilidad NO decide por el texto de la pantalla:
+     * ese texto lo pone el APK que se esta instalando, asi que un APK ajeno
+     * etiquetado "S2000 Dash" pasaria cualquier filtro por nombre. En vez de
+     * eso, el instalador arma esta ventana justo antes de pedir la
+     * confirmacion, y fuera de ella el servicio no toca nada.
+     */
+    @Volatile
+    private var armadoHastaMs: Long = 0
+
+    @Volatile
+    var versionArmada: Int = -1
+        private set
+
+    fun armar(versionCode: Int, duracionMs: Long = 120_000) {
+        versionArmada = versionCode
+        armadoHastaMs = System.currentTimeMillis() + duracionMs
+        note("Instalacion armada para v$versionCode")
+    }
+
+    fun desarmar() {
+        armadoHastaMs = 0
+        versionArmada = -1
+    }
+
+    /** true solo si nosotros pedimos una instalacion hace poco. */
+    fun estaArmado(): Boolean = System.currentTimeMillis() < armadoHastaMs
+
     @Synchronized
     fun recordCheck(remote: Int) {
         lastCheckMs = System.currentTimeMillis()

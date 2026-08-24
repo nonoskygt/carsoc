@@ -81,12 +81,41 @@ class UpdateChecker(private val context: Context) {
                 UpdateState.note("Fallo la descarga de $url")
                 return false
             }
-            UpdateState.note("Descargado ${apk.length()} bytes; instalando")
-            AutoInstaller.install(context, apk)
+            UpdateState.note("Descargado ${apk.length()} bytes; verificando")
+
+            // Antes de instalar NADA: comprobar que el APK es de verdad una
+            // version nueva de esta app, firmada por nosotros. El anuncio
+            // que nos trajo hasta aqui no esta autenticado y la descarga va
+            // en claro, asi que esta es la barrera que impide que alguien de
+            // la red meta codigo arbitrario en el carro.
+            when (val v = ApkVerifier.verify(context, apk, remote)) {
+                is ApkVerifier.Result.Rechazado -> {
+                    UpdateState.note("APK RECHAZADO: ${v.motivo}")
+                    apk.delete()
+                    return false
+                }
+                ApkVerifier.Result.Ok -> UpdateState.note("APK verificado")
+            }
+
+            limpiarDescargasViejas(apk)
+            UpdateState.armar(remote)
+            val arrancada = AutoInstaller.install(context, apk)
+            if (!arrancada) UpdateState.desarmar()
+            arrancada
         } catch (e: Exception) {
             Log.w(TAG, "Fallo la revision: ${e.message}")
             UpdateState.note("Fallo la revision: ${e.message}")
             false
+        }
+    }
+
+    /** El almacenamiento de un head unit es pequeno: no acumular APKs. */
+    private fun limpiarDescargasViejas(conservar: File) {
+        runCatching {
+            context.filesDir.listFiles { f ->
+                f.name.startsWith("update-") && f.name.endsWith(".apk") &&
+                    f.absolutePath != conservar.absolutePath
+            }?.forEach { it.delete() }
         }
     }
 

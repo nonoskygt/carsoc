@@ -17,16 +17,19 @@ class InstallDialogRulesTest {
     @Test
     fun `confirma los botones de instalar en ambos idiomas`() {
         for (t in listOf("Instalar", "INSTALAR", "install", "Install",
-                         "Actualizar", "Update", "Aceptar", "OK", "Continuar", "Listo")) {
+                         "Actualizar", "Update", "  Instalar  ")) {
             assertTrue("debio confirmar '$t'", InstallDialogRules.isConfirmButton(t))
         }
     }
 
     @Test
-    fun `tolera espacios y acentos`() {
-        assertTrue(InstallDialogRules.isConfirmButton("  Instalar  "))
-        assertTrue(InstallDialogRules.isConfirmButton("Atrás").not())
-        assertTrue(InstallDialogRules.isConfirmButton("Aceptar"))
+    fun `no confirma con Aceptar ni OK`() {
+        // Son los botones del dialogo de DESINSTALAR y de los de permisos.
+        // Estaban en la lista de confirmacion y el auto-confirmador podia
+        // acabar borrando la app o concediendo permisos sin que nadie viera.
+        for (t in listOf("Aceptar", "OK", "Listo", "Continuar", "Permitir", "Conceder")) {
+            assertFalse("JAMAS debio tocar '$t'", InstallDialogRules.isConfirmButton(t))
+        }
     }
 
     // --- Lo que JAMAS se toca -----------------------------------------------
@@ -65,25 +68,40 @@ class InstallDialogRulesTest {
     }
 
     @Test
-    fun `solo confirma instalaciones de esta app`() {
-        val pkg = "com.nonosky.s2000dash"
-        val label = "s2000 dash"
-
-        assertTrue(
-            InstallDialogRules.mentionsOurApp(
-                listOf("¿Quieres actualizar esta aplicación?", "S2000 Dash"), pkg, label
-            )
-        )
-        assertTrue(
-            InstallDialogRules.mentionsOurApp(listOf("com.nonosky.s2000dash"), pkg, label)
-        )
-
-        // Un APK ajeno que llegue al radio no se instala solo.
+    fun `sin sesion armada no se confirma nada`() {
+        // Aunque la ventana diga ser nuestra: ese texto lo pone el APK que
+        // se esta instalando, no el sistema.
         assertFalse(
-            InstallDialogRules.mentionsOurApp(
-                listOf("¿Quieres instalar esta aplicación?", "Juego Gratis"), pkg, label
+            InstallDialogRules.puedeConfirmar(
+                listOf("¿Quieres actualizar esta aplicación?", "S2000 Dash"),
+                sesionArmada = false,
             )
         )
-        assertFalse(InstallDialogRules.mentionsOurApp(emptyList(), pkg, label))
+    }
+
+    @Test
+    fun `con sesion armada se confirma la instalacion`() {
+        assertTrue(
+            InstallDialogRules.puedeConfirmar(
+                listOf("¿Quieres actualizar esta aplicación?", "S2000 Dash"),
+                sesionArmada = true,
+            )
+        )
+    }
+
+    @Test
+    fun `ni armado se confirma un dialogo de desinstalar o de permisos`() {
+        // Si por lo que sea aparece otro dialogo dentro de la ventana de
+        // tiempo, el servicio se aparta.
+        assertFalse(
+            InstallDialogRules.puedeConfirmar(
+                listOf("¿Quieres desinstalar esta aplicación?"), sesionArmada = true
+            )
+        )
+        assertFalse(
+            InstallDialogRules.puedeConfirmar(
+                listOf("¿Permitir que S2000 Dash acceda a tu ubicación?"), sesionArmada = true
+            )
+        )
     }
 }

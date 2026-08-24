@@ -24,19 +24,25 @@ object InstallDialogRules {
     private val CONFIRMA = setOf(
         "instalar", "install",
         "actualizar", "update",
-        "aceptar", "ok",
-        "continuar", "continue",
-        "listo", "done",
     )
 
-    /** Por si algun fabricante mete texto raro: nunca tocar esto. */
+    /**
+     * Nunca se toca esto. "aceptar", "ok" y "listo" estaban antes en la
+     * lista de confirmacion y se quitaron: son los botones del dialogo de
+     * DESINSTALAR y de los de permisos, asi que el auto-confirmador podia
+     * acabar borrando la propia app o concediendo permisos que nadie vio.
+     * Ahora solo se pulsa un boton que diga literalmente instalar o
+     * actualizar.
+     */
     private val NUNCA = setOf(
         "cancelar", "cancel",
         "no instalar", "dont install", "don't install",
         "rechazar", "deny", "denegar",
         "desinstalar", "uninstall",
+        "aceptar", "ok", "listo", "done",
         "atras", "back",
         "configuracion", "settings", "ajustes",
+        "permitir", "allow", "conceder", "grant",
     )
 
     fun isInstallerPackage(pkg: String?): Boolean {
@@ -51,15 +57,33 @@ object InstallDialogRules {
     }
 
     /**
-     * Solo confirmamos instalaciones de ESTA app. Un servicio que aceptara
-     * cualquier instalacion convertiria el radio en una puerta abierta:
-     * cualquier APK que llegara se instalaria sin que nadie lo viera.
+     * Palabras que delatan que el dialogo NO es una instalacion nuestra.
+     * Si aparece alguna, el servicio se aparta aunque haya sesion armada.
      */
-    fun mentionsOurApp(texts: List<String>, packageName: String, label: String): Boolean {
-        val marcas = listOf(packageName.lowercase(), label.lowercase())
-        return texts.any { t ->
+    private val SENALES_PELIGRO = listOf(
+        "desinstalar", "uninstall",
+        "permitir que", "allow ", "conceder", "grant ",
+        "acceso a", "access to",
+    )
+
+    /**
+     * Decide si se puede confirmar la ventana.
+     *
+     * **No se mira el nombre de la app.** Se miraba antes, y era un agujero:
+     * el dialogo del sistema muestra el `android:label` que trae el APK que
+     * se esta instalando, o sea una cadena que controla quien fabrico ese
+     * APK. Bastaba llamarse "S2000 Dash" para que el servicio confirmara la
+     * instalacion de cualquier cosa.
+     *
+     * Ahora manda [sesionArmada]: solo se confirma si fuimos nosotros
+     * quienes acabamos de pedir una instalacion, y el APK ya paso la
+     * verificacion de firma antes de llegar aqui.
+     */
+    fun puedeConfirmar(texts: List<String>, sesionArmada: Boolean): Boolean {
+        if (!sesionArmada) return false
+        return texts.none { t ->
             val n = t.lowercase()
-            marcas.any { n.contains(it) }
+            SENALES_PELIGRO.any { n.contains(it) }
         }
     }
 

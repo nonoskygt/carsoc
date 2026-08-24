@@ -96,22 +96,31 @@ class DashView @JvmOverloads constructor(
         val h = height.toFloat()
         canvas.drawColor(COLOR_BG)
 
-        // El tacometro manda: ocupa el bloque izquierdo, cuadrado respecto
-        // al alto. Todo lo demas se acomoda en el ancho sobrante, para que
-        // el layout aguante desde 800x480 hasta 1280x480 sin tocar codigo.
-        val dialSize = min(h * 0.96f, w * 0.5f)
-        val cx = dialSize * 0.52f
+        // Tres columnas. La pantalla del radio es una barra de 2.67:1, asi
+        // que apilar todo a la derecha del tacometro dejaba media pantalla
+        // vacia y amontonaba la velocidad con la temperatura. Repartido en
+        // columnas cada dato tiene su sitio y se lee de un vistazo.
+        //
+        //   [ tacometro ] [   velocidad   ] [ agua / aire / carga / bateria ]
+        //
+        // Las proporciones son relativas al viewport: el mismo codigo sirve
+        // para 800x480 o 1024x600 sin tocar nada.
+        val dialSize = min(h * 0.98f, w * 0.38f)
+        val cx = dialSize * 0.50f
         val cy = h * 0.5f
-        val radius = dialSize * 0.46f
+        val radius = dialSize * 0.45f
 
         drawTachometer(canvas, cx, cy, radius)
 
-        val panelLeft = dialSize * 1.02f
-        val panelWidth = w - panelLeft
-        drawSpeed(canvas, panelLeft, panelWidth, h)
-        drawCoolantBar(canvas, panelLeft, panelWidth, h)
-        drawFooter(canvas, panelLeft, panelWidth, h)
-        drawConnectionBadge(canvas, panelLeft, panelWidth, h)
+        val midLeft = dialSize
+        val restante = w - midLeft
+        val midWidth = restante * 0.55f
+        val rightLeft = midLeft + midWidth
+        val rightWidth = w - rightLeft
+
+        drawConnectionBadge(canvas, midLeft, restante, h)
+        drawSpeed(canvas, midLeft, midWidth, h)
+        drawRightColumn(canvas, rightLeft, rightWidth, h)
 
         postInvalidateOnAnimation()
     }
@@ -278,105 +287,105 @@ class DashView @JvmOverloads constructor(
     private fun sweepFor(fromRpm: Int, toRpm: Int): Float =
         sweepDeg * ((toRpm - fromRpm).toFloat() / EngineConstants.RPM_MAX).coerceIn(0f, 1f)
 
-    // --- Panel derecho ------------------------------------------------------
+    // --- Columna central: velocidad ----------------------------------------
 
-    private fun drawSpeed(canvas: Canvas, left: Float, panelW: Float, h: Float) {
-        val cx = left + panelW * 0.5f
-        val now = System.currentTimeMillis()
-        val stale = state.isStale(state.speedAtMs, now)
+    private fun drawSpeed(canvas: Canvas, left: Float, ancho: Float, h: Float) {
+        val cx = left + ancho * 0.5f
+        val stale = state.isStale(state.speedAtMs, System.currentTimeMillis())
 
         textPaint.color = if (stale) COLOR_STALE else COLOR_TEXT
-        textPaint.textSize = h * 0.44f
-        canvas.drawText(state.speedKmh?.toString() ?: "--", cx, h * 0.44f, textPaint)
+        // El numero se mide antes de pintarlo y se encoge si tres digitos no
+        // caben en la columna. En una pantalla mas angosta que la del radio
+        // se recortaria en silencio, y un tablero no puede mentir por recorte.
+        textPaint.textSize = h * 0.46f
+        val texto = state.speedKmh?.toString() ?: "--"
+        val maximo = ancho * 0.92f
+        val medido = textPaint.measureText(texto)
+        if (medido > maximo) textPaint.textSize = textPaint.textSize * (maximo / medido)
+
+        canvas.drawText(texto, cx, h * 0.62f, textPaint)
 
         labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = h * 0.075f
-        canvas.drawText("km/h", cx, h * 0.53f, labelPaint)
+        labelPaint.textSize = h * 0.085f
+        canvas.drawText("km/h", cx, h * 0.75f, labelPaint)
     }
 
-    private fun drawCoolantBar(canvas: Canvas, left: Float, panelW: Float, h: Float) {
-        val barLeft = left + panelW * 0.10f
-        val barRight = left + panelW * 0.90f
-        val barTop = h * 0.60f
-        val barH = h * 0.075f
+    // --- Columna derecha: agua, aire, carga, bateria -----------------------
+
+    private fun drawRightColumn(canvas: Canvas, left: Float, ancho: Float, h: Float) {
         val now = System.currentTimeMillis()
-        val stale = state.isStale(state.coolantAtMs, now)
+        val margen = ancho * 0.06f
+        val x0 = left + margen
+        val x1 = left + ancho - margen
 
-        // Canaleta
-        barPaint.color = COLOR_TRACK
-        canvas.drawRoundRect(barLeft, barTop, barRight, barTop + barH, barH / 2, barH / 2, barPaint)
-
+        // El agua lleva barra ademas del numero: es el unico dato donde
+        // importa la tendencia y no solo el valor.
         val c = state.coolantC
+        val aguaStale = state.isStale(state.coolantAtMs, now)
+        drawRow(canvas, x0, x1, h * 0.20f, h, "AGUA", c?.let { "$it °C" } ?: "-- °C", aguaStale)
+
+        val barTop = h * 0.245f
+        val barH = h * 0.055f
+        barPaint.color = COLOR_TRACK
+        canvas.drawRoundRect(x0, barTop, x1, barTop + barH, barH / 2, barH / 2, barPaint)
         if (c != null) {
-            // Escala util: de 40 a 120 °C. Debajo de 40 el motor esta frio y
-            // arriba de 120 ya es problema — no hace falta mas resolucion.
+            // Escala util: de 40 a 120 °C. Debajo el motor esta frio y arriba
+            // ya es problema; mas resolucion no ayudaria a decidir nada.
             val t = ((c - 40f) / 80f).coerceIn(0f, 1f)
             barPaint.color = when {
-                stale -> COLOR_STALE
+                aguaStale -> COLOR_STALE
                 c >= EngineConstants.COOLANT_HIGH_C -> COLOR_REDLINE
                 c >= EngineConstants.COOLANT_NORMAL_C -> COLOR_GREEN
                 else -> COLOR_COLD
             }
-            canvas.drawRoundRect(
-                barLeft, barTop, barLeft + (barRight - barLeft) * t, barTop + barH,
-                barH / 2, barH / 2, barPaint,
-            )
+            canvas.drawRoundRect(x0, barTop, x0 + (x1 - x0) * t, barTop + barH, barH / 2, barH / 2, barPaint)
         }
 
-        labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = h * 0.062f
-        labelPaint.textAlign = Paint.Align.LEFT
-        canvas.drawText("AGUA", barLeft, barTop - h * 0.022f, labelPaint)
-        labelPaint.textAlign = Paint.Align.RIGHT
-        labelPaint.color = if (stale) COLOR_STALE else COLOR_TEXT
-        canvas.drawText(c?.let { "$it °C" } ?: "-- °C", barRight, barTop - h * 0.022f, labelPaint)
-        labelPaint.textAlign = Paint.Align.CENTER
-    }
-
-    private fun drawFooter(canvas: Canvas, left: Float, panelW: Float, h: Float) {
-        val now = System.currentTimeMillis()
-        val y = h * 0.86f
-        val slot = panelW / 3f
-
-        drawStat(canvas, left + slot * 0.5f, y, h, "AIRE",
-            state.iatC?.let { "$it°" } ?: "--", state.isStale(state.iatAtMs, now))
-        drawStat(canvas, left + slot * 1.5f, y, h, "CARGA",
-            state.loadPct?.let { "$it%" } ?: "--", state.isStale(state.loadAtMs, now))
-        drawStat(canvas, left + slot * 2.5f, y, h, "BATERIA",
-            state.batteryV?.let { String.format("%.1fV", it) } ?: "--",
+        drawRow(canvas, x0, x1, h * 0.48f, h, "AIRE",
+            state.iatC?.let { "$it °C" } ?: "-- °C", state.isStale(state.iatAtMs, now))
+        drawRow(canvas, x0, x1, h * 0.65f, h, "CARGA",
+            state.loadPct?.let { "$it %" } ?: "-- %", state.isStale(state.loadAtMs, now))
+        drawRow(canvas, x0, x1, h * 0.82f, h, "BATERIA",
+            state.batteryV?.let { String.format("%.1f V", it) } ?: "-- V",
             state.isStale(state.batteryAtMs, now))
     }
 
-    private fun drawStat(
-        canvas: Canvas, cx: Float, y: Float, h: Float,
-        label: String, value: String, stale: Boolean,
+    /** Etiqueta a la izquierda, valor a la derecha, ambos en la misma linea. */
+    private fun drawRow(
+        canvas: Canvas, x0: Float, x1: Float, y: Float, h: Float,
+        etiqueta: String, valor: String, stale: Boolean,
     ) {
+        labelPaint.textAlign = Paint.Align.LEFT
         labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = h * 0.055f
-        canvas.drawText(label, cx, y, labelPaint)
-        textPaint.color = if (stale) COLOR_STALE else COLOR_TEXT
-        textPaint.textSize = h * 0.105f
-        canvas.drawText(value, cx, y + h * 0.105f, textPaint)
+        labelPaint.textSize = h * 0.075f
+        canvas.drawText(etiqueta, x0, y, labelPaint)
+
+        labelPaint.textAlign = Paint.Align.RIGHT
+        labelPaint.color = if (stale) COLOR_STALE else COLOR_TEXT
+        labelPaint.textSize = h * 0.095f
+        canvas.drawText(valor, x1, y, labelPaint)
+
+        labelPaint.textAlign = Paint.Align.CENTER
     }
 
     /** Un punto de color y una palabra: basta para saber si el dato es vivo. */
-    private fun drawConnectionBadge(canvas: Canvas, left: Float, panelW: Float, h: Float) {
-        val (color, text) = when (state.connection) {
-            ConnectionState.Polling -> COLOR_GREEN to (state.protocol?.take(18) ?: "EN LINEA")
+    private fun drawConnectionBadge(canvas: Canvas, left: Float, ancho: Float, h: Float) {
+        val (color, texto) = when (state.connection) {
+            ConnectionState.Polling -> COLOR_GREEN to (state.protocol?.take(22) ?: "EN LINEA")
             ConnectionState.Initializing -> COLOR_AMBER to "INICIANDO"
             ConnectionState.Connecting -> COLOR_AMBER to "CONECTANDO"
             ConnectionState.Disconnected -> COLOR_REDLINE to "SIN ENLACE"
         }
         val r = h * 0.018f
-        val cx = left + panelW * 0.5f
-        val y = h * 0.055f
+        val cx = left + ancho * 0.5f
+        val y = h * 0.11f
 
-        labelPaint.textSize = h * 0.05f
+        labelPaint.textSize = h * 0.058f
         labelPaint.color = COLOR_TEXT_DIM
-        val textW = labelPaint.measureText(text)
+        val anchoTexto = labelPaint.measureText(texto)
         barPaint.color = color
-        canvas.drawCircle(cx - textW / 2 - r * 2.2f, y - h * 0.014f, r, barPaint)
-        canvas.drawText(text, cx, y, labelPaint)
+        canvas.drawCircle(cx - anchoTexto / 2 - r * 2.4f, y - h * 0.017f, r, barPaint)
+        canvas.drawText(texto, cx, y, labelPaint)
     }
 
     private companion object {

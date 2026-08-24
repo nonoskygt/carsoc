@@ -27,13 +27,24 @@ class InstallAutoClickService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (!InstallDialogRules.isInstallerPackage(pkg)) return
 
+        // Sin sesion armada por nosotros no se toca nada, por mucho que la
+        // ventana diga que es S2000 Dash: ese texto lo pone el APK que se
+        // instala, no el sistema.
+        if (!UpdateState.estaArmado()) return
+
         val root = rootInActiveWindow ?: return
         try {
-            if (!mentionsThisApp(root)) return
+            val textos = mutableListOf<String>()
+            collectTexts(root, textos)
+            if (!InstallDialogRules.puedeConfirmar(textos, sesionArmada = true)) return
             val clicked = clickFirstMatching(root)
             if (clicked != null) {
                 Log.i(TAG, "Confirmado con el boton '$clicked'")
                 UpdateState.note("Dialogo confirmado: '$clicked'")
+                // Una sola confirmacion por sesion: sin esto el servicio
+                // seguiria pulsando en cualquier dialogo posterior mientras
+                // durase la ventana de tiempo.
+                UpdateState.desarmar()
             }
         } catch (e: Exception) {
             Log.w(TAG, "Fallo revisando la ventana: ${e.message}")
@@ -48,13 +59,6 @@ class InstallAutoClickService : AccessibilityService() {
         super.onServiceConnected()
         Log.i(TAG, "Servicio de auto-confirmacion conectado")
         UpdateState.note("Auto-confirmacion activa")
-    }
-
-    /** Salvaguarda: no confirmamos instalaciones que no sean de esta app. */
-    private fun mentionsThisApp(root: AccessibilityNodeInfo): Boolean {
-        val textos = mutableListOf<String>()
-        collectTexts(root, textos)
-        return InstallDialogRules.mentionsOurApp(textos, packageName, APP_LABEL)
     }
 
     private fun collectTexts(node: AccessibilityNodeInfo?, into: MutableList<String>) {
@@ -98,7 +102,6 @@ class InstallAutoClickService : AccessibilityService() {
 
     private companion object {
         const val TAG = "InstallAutoClick"
-        const val APP_LABEL = "s2000 dash"
         /** Tope de nodos a recorrer: una ventana rara no nos cuelga. */
         const val MAX_NODOS = 400
     }
