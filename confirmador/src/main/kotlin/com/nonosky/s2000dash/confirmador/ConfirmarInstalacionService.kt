@@ -34,6 +34,20 @@ class ConfirmarInstalacionService : AccessibilityService() {
         // ninguno de los de AOSP. Lo que acota el alcance es la ventana de
         // armado, que dura segundos y la abre el tablero.
         if (Armado.pinActivo()) {
+            // Android 11 no siempre muestra un dialogo para el
+            // emparejamiento: cuando lo pide una app puede publicarlo como
+            // NOTIFICACION, y ahi se queda hasta que alguien la toca. Sin
+            // mirar tambien las notificaciones el confirmador es ciego a
+            // justo el caso que nos bloquea.
+            if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+                val texto = event.text?.joinToString(" ") ?: ""
+                reportar("NOTIFICACION [$pkg]: $texto")
+                if (esNotificacionDeEmparejamiento(texto)) {
+                    reportar("es de emparejamiento -> abriendo")
+                    abrirNotificacion(event)
+                }
+                return
+            }
             reportar("ventana: $pkg")
             if (rellenarPin()) return
         }
@@ -73,22 +87,29 @@ class ConfirmarInstalacionService : AccessibilityService() {
         val root = rootInActiveWindow ?: return false
         try {
             val campo = buscarCampoTexto(root)
-            if (campo == null) {
-                reportar("sin campo de texto editable en esta ventana")
-                return false
-            }
-            val args = android.os.Bundle().apply {
-                putCharSequence(
-                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pin
-                )
-            }
-            if (!campo.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                Log.w(TAG, "No se pudo escribir el PIN")
-                return false
-            }
-            Log.i(TAG, "PIN escrito; buscando el boton de aceptar")
 
-            // El boton suele habilitarse solo al haber texto, asi que se
+            if (campo != null) {
+                val args = android.os.Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pin
+                    )
+                }
+                if (campo.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                    reportar("PIN '$pin' escrito")
+                } else {
+                    reportar("no se pudo escribir el PIN")
+                }
+            } else {
+                // Muchos adaptadores usan emparejamiento "Just Works": el
+                // sistema no pide PIN, solo un "¿Emparejar?" con un boton.
+                // Antes se exigia un campo de texto y se abandonaba sin
+                // pulsar nada, que es justo lo que dejaba el vinculo colgado.
+                val textos = ArrayList<String>()
+                recogerTextos(root, textos)
+                reportar("sin campo; ventana dice: " + textos.take(8).joinToString(" / "))
+            }
+
+            // El boton puede habilitarse solo al haber texto, asi que se
             // vuelve a leer la ventana en vez de reutilizar el arbol viejo.
             val fresco = rootInActiveWindow ?: root
             val pulsado = pulsarBotonEmparejar(fresco)
@@ -98,7 +119,9 @@ class ConfirmarInstalacionService : AccessibilityService() {
                 Armado.desarmarPin()
                 return true
             }
-            reportar("PIN escrito pero no se hallo boton de emparejar")
+            val textos = ArrayList<String>()
+            recogerTextos(fresco, textos)
+            reportar("no se hallo boton; ventana dice: " + textos.take(10).joinToString(" / "))
             return false
         } catch (e: Exception) {
             Log.w(TAG, "Fallo rellenando el PIN: ${e.message}")
@@ -140,6 +163,26 @@ class ConfirmarInstalacionService : AccessibilityService() {
             }
         }
         return null
+    }
+
+    private fun esNotificacionDeEmparejamiento(t: String): Boolean {
+        val n = t.lowercase()
+        return listOf("emparej", "pairing", "vincul", "bluetooth").any { n.contains(it) }
+    }
+
+    /** Abre la notificacion: eso hace salir el dialogo real. */
+    private fun abrirNotificacion(event: AccessibilityEvent) {
+        val p = event.parcelableData
+        if (p is android.app.Notification) {
+            runCatching {
+                p.contentIntent?.send()
+                reportar("notificacion abierta")
+            }.onFailure { reportar("no se pudo abrir: ${it.message}") }
+        } else {
+            // Sin PendingIntent: desplegar la bandeja para que salga.
+            performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+            reportar("bandeja de notificaciones desplegada")
+        }
     }
 
     /**

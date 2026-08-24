@@ -154,6 +154,24 @@ class ObdPairing(
         }.onFailure { Log.w(TAG, "No se pudo barrer: ${it.message}") }
     }
 
+    /**
+     * Cancela un emparejamiento colgado.
+     *
+     * Un vinculo que se queda en BONDING bloquea todo reintento —
+     * `createBond` devuelve false sin hacer nada— y no hay API publica para
+     * abortarlo. La reflexion es fea pero es lo unico que hay.
+     */
+    fun cancelarVinculoColgado(device: BluetoothDevice): Boolean = runCatching {
+        if (device.bondState != BluetoothDevice.BOND_BONDING) return false
+        val m = device.javaClass.getMethod("cancelBondProcess")
+        val ok = m.invoke(device) as? Boolean ?: false
+        trazar("cancelBondProcess devolvio $ok")
+        ok
+    }.getOrElse {
+        trazar("cancelBondProcess fallo: ${it.message}")
+        false
+    }
+
     fun bond(device: BluetoothDevice) {
         objetivo = device.address
         // El barrido activo destroza el throughput y el emparejamiento.
@@ -163,7 +181,13 @@ class ObdPairing(
             return
         }
         traza.clear()
-        trazar("createBond() sobre ${device.address}")
+        // Si quedo uno colgado de un intento anterior, abortarlo: si no,
+        // createBond devuelve false para siempre y nada avanza.
+        if (device.bondState == BluetoothDevice.BOND_BONDING) {
+            cancelarVinculoColgado(device)
+            Thread.sleep(1_500)
+        }
+        trazar("createBond() sobre ${device.address}, estado previo=${device.bondState}")
         runCatching {
             val ok = device.createBond()
             trazar("createBond devolvio $ok")

@@ -33,35 +33,47 @@ class SppTransport(
         // El descubrimiento activo mata el throughput de RFCOMM.
         runCatching { adapter?.cancelDiscovery() }
 
-        val s = try {
-            device.createRfcommSocketToServiceRecord(SPP_UUID)
-        } catch (e: IOException) {
-            throw IOException("No se pudo crear el socket RFCOMM", e)
-        }
+        // Se prueban varias formas, en este orden y por una razon concreta:
+        //
+        // 1. INSEGURO al UUID de SPP. Es la que funciona con los clones de
+        //    ELM327, porque NO exige emparejamiento previo. Muchos de estos
+        //    adaptadores no completan el emparejamiento seguro de Android
+        //    —se quedan en "vinculando" para siempre— y con el socket seguro
+        //    no hay manera de hablarles.
+        // 2. SEGURO al UUID de SPP, para los adaptadores que si se emparejan.
+        // 3. Canal 1 por reflexion, seguro e inseguro: el ultimo recurso de
+        //    los clones que ni siquiera publican el servicio SPP.
+        val intentos = listOf<Pair<String, () -> BluetoothSocket>>(
+            "inseguro-SPP" to { device.createInsecureRfcommSocketToServiceRecord(SPP_UUID) },
+            "seguro-SPP" to { device.createRfcommSocketToServiceRecord(SPP_UUID) },
+            "inseguro-canal1" to { canalPorReflexion("createInsecureRfcommSocket") },
+            "seguro-canal1" to { canalPorReflexion("createRfcommSocket") },
+        )
 
-        try {
-            s.connect()
-        } catch (first: IOException) {
-            // Muchos clones fallan el connect() normal pero aceptan el canal 1
-            // por reflexion. Es un truco conocido y vale intentarlo antes de
-            // rendirse: sin el, varios adaptadores baratos nunca conectan.
-            runCatching { s.close() }
-            var alt: BluetoothSocket? = null
+        val fallos = StringBuilder()
+        for ((nombre, crear) in intentos) {
+            var s: BluetoothSocket? = null
             try {
-                val m = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-                alt = m.invoke(device, 1) as BluetoothSocket
-                alt.connect()
-            } catch (second: Exception) {
-                // Cerrar el socket alterno si se creo pero no conecto: sin
-                // esto se fuga un canal RFCOMM en cada reintento, y el
-                // scheduler reintenta con backoff para siempre.
-                runCatching { alt?.close() }
-                throw IOException("Fallo RFCOMM (normal y canal 1): ${first.message}", second)
+                s = crear()
+                s.connect()
+                Log.i(TAG, "Conectado por $nombre")
+                attach(s)
+                return
+            } catch (e: Exception) {
+                // Cerrar SIEMPRE el socket que no conecto: si no, cada
+                // reintento fuga un canal RFCOMM y acaban agotandose.
+                runCatching { s?.close() }
+                Log.w(TAG, "$nombre fallo: ${e.message}")
+                fallos.append(nombre).append("=").append(e.message).append("; ")
             }
-            attach(alt)
-            return
         }
-        attach(s)
+        throw IOException("RFCOMM fallo por todas las vias: $fallos")
+    }
+
+    /** Canal 1 por reflexion, para clones sin registro SDP. */
+    private fun canalPorReflexion(metodo: String): BluetoothSocket {
+        val m = device.javaClass.getMethod(metodo, Int::class.javaPrimitiveType)
+        return m.invoke(device, 1) as BluetoothSocket
     }
 
     private fun attach(s: BluetoothSocket) {
