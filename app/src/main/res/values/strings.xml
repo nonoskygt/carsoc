@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">S2000 Dash</string>
+    <string name="choose_adapter">Elige el adaptador OBD</string>
+    <string name="needs_bluetooth">Sin permiso de Bluetooth no hay tablero</string>
+    <string name="enable_bluetooth">Enciende el Bluetooth</string>
+    <string name="pair_first">Empareja primero el adaptador OBD en Ajustes de Bluetooth</string>
+</resources>
