@@ -1,6 +1,6 @@
 # S2000 Dash — Estado y punto de retomada
 
-**Última actualización:** 2026-08-23
+**Última actualización:** 2026-08-23 (noche, sesión 2)
 
 Este archivo captura DÓNDE nos quedamos, para no repetir trabajo ni perder lo verificado.
 
@@ -8,9 +8,46 @@ Este archivo captura DÓNDE nos quedamos, para no repetir trabajo ni perder lo v
 
 ## Resumen en una línea
 
-El diseño de la app está aprobado y escrito. Estamos trabados en **conseguir acceso
-al radio (head unit RK3326)** para leer sus specs e instalar la app. El servidor SSH
-del radio ya responde; falta autenticarse con el **usuario correcto**.
+✅ **ACCESO AL RADIO RESUELTO.** SimpleSSHD (puerto 2222) quedó descartado por su OTP
+rotativa + bug de ruta de `authorized_keys`. Se usa **Termux SSH (puerto 8022)** con
+llave ed25519 sin passphrase — login sin password, funcionando. Ya se leyeron todas
+las specs del radio (ver abajo). Toca decidir el toolchain de build y empezar el APK.
+
+### Cómo conectarse ahora mismo
+
+```
+ssh -i "<scratchpad-sesion-actual>\radio_key2" -p 8022 -o BatchMode=yes root@192.168.2.57
+```
+
+(Termux SSH acepta cualquier nombre de usuario en el login SSH; el shell real siempre
+es `u0_a83`. La llave privada `radio_key2` NO tiene passphrase — se generó fresca
+porque la primera llave, `radio_key` en la sesión anterior, quedó con passphrase
+desconocida y ya no sirve.)
+
+Pública instalada en el radio (`~/.ssh/authorized_keys` de Termux, usuario `u0_a83`):
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ7hM7QJe0eYv28jsYu1uhTxEZHDUvP8Ml9uVHUHe4JZ claude-radio-s2000-2
+```
+
+### Por qué SimpleSSHD (puerto 2222) no sirvió al final
+
+1. Usuario correcto = `user` (confirmado).
+2. La OTP se genera **por conexión entrante**, no por intervalo de tiempo — cada
+   intento nuevo rota la password, así que hay que leerla y usarla en la MISMA
+   conexión (no reconectar). Se resolvió con un script que abre el socket y espera
+   a que el usuario lea la pantalla antes de mandar el password.
+3. Bug real: la ruta de `authorized_keys` NO es `$HOME/.ssh/authorized_keys` sino
+   literalmente `<SSH Path>/authorized_keys` (sin subcarpeta `.ssh`), donde
+   `SSH Path` es un ajuste configurable en Settings → Dropbear → Paths, y por
+   default vale `/data/user/0/org.galexander.sshd/files` (visible también en el
+   menú "Copy App-private Path"). Instalar ahí SÍ hizo que el servidor reconociera
+   la llave — pero...
+4. Una vez que SimpleSSHD detecta que existe `authorized_keys`, **deja de generar
+   OTP para cualquier conexión**, incluidas las que solo intentan password. Y la
+   llave `radio_key` que se había generado en la sesión anterior resultó tener
+   passphrase (nunca registrada) — quedamos sin password Y sin llave usable.
+   Conclusión: **no vale la pena volver a SimpleSSHD**; usar Termux es más simple
+   y ya está andando.
 
 ---
 
@@ -30,56 +67,21 @@ del radio ya responde; falta autenticarse con el **usuario correcto**.
 
 ---
 
-## EL BLOQUEO ACTUAL
+## Specs del radio (leídas por SSH, riesgo R2 del spec CERRADO)
 
-SimpleSSHD usa **contraseña de un solo uso** (cambia en cada intento) y estábamos
-mandando el **usuario equivocado**. La pantalla de SimpleSSHD mostró
-**"attempt from user"**, lo que indica que el nombre de usuario correcto es
-literalmente **`user`** — NO `root`, `admin`, `any` ni `u0_aXXX`.
+| Cosa | Valor |
+|---|---|
+| Android | **11**, API level **30** |
+| Marca/modelo/device | `rockchip` / `auto_rk_t11` / `auto_rk_t11` |
+| SoC | `rk3326` (`ro.hardware=rk30board`) |
+| ABI | **armeabi-v7a, armeabi** — es de 32 bits puro, **NO arm64-v8a**. Cualquier build/APK debe targetear `armeabi-v7a`. |
+| Pantalla | **1280×480** físico, densidad **160** (ldpi/mdpi real, panel ancho tipo barra) |
+| Root (`su`) | **NO tiene** — confirmado, "No su program found" |
+| ADB por red (`persist.sys.usb.config`) | `none` — no está habilitado; sin root no se puede activar por sistema. |
 
-Se quemaron 4 contraseñas OTP probando con usuario equivocado.
-
-### Próximo paso EXACTO al retomar
-
-1. El usuario abre SimpleSSHD y lee la contraseña **actual** en pantalla.
-2. Correr (una sola vez, dispara al instante para que no rote):
-   ```
-   C:\Users\Usuario\AppData\Local\Programs\Python\Python311\python.exe \
-     "<scratchpad>\go.py"  <PASSWORD_FRESCA>
-   ```
-   - `go.py` ya está escrito. Usuario fijo = **`user`**. Una sola autenticación.
-   - Si entra: instala la llave pública automáticamente y vuelca las specs del radio.
-3. Al instalar la llave, **se acaba la dependencia de la OTP** — de ahí en adelante:
-   ```
-   ssh -i "<scratchpad>\radio_key" -p 2222 user@192.168.2.57
-   ```
-
-`<scratchpad>` = `C:\Users\Usuario\AppData\Local\Temp\claude\C--Users-Usuario-s2000\d22f7a3d-646d-4186-b49f-67e48d5f0a1d\scratchpad`
-
-### Si el usuario `user` tampoco entra
-
-- Leer la línea EXACTA que muestra SimpleSSHD (formato `usuario@ip:puerto`) y usar ese usuario.
-- Plan B: usar **Termux** (ya instalado) con contraseña FIJA — más estable que la OTP:
-  en Termux teclear `pkg i openssh -y`, `passwd` (fijar una), `sshd`, `whoami`.
-  Luego `ssh -p 8022 <whoami>@192.168.2.57`.
-
----
-
-## Llave pública a instalar en el radio
-
-```
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINpc7Ubdb2lfGe4MZgTHaJgCbRboGvWXs+grmw9Kdk/8 claude-radio-s2000
-```
-
----
-
-## Lo que sigue pendiente de saber del radio (cierra riesgo R2 del spec)
-
-Nada de esto se ha podido leer aún — requiere entrar por SSH:
-- Versión de Android y API level
-- Resolución exacta y densidad de pantalla
-- ABI del RK3326 (esperado arm — confirmar arm64-v8a vs armeabi-v7a)
-- Si tiene **root** (`su`). Si lo tiene → activar adb por red y usar `scrcpy` (control total de pantalla) + `logcat`.
+Implicación directa para el spec: sin root, **no hay `scrcpy` ni control remoto de
+pantalla**, y hay que compilar el APK para `armeabi-v7a` (32-bit) — revisar que el
+toolchain de Kotlin/Android genere ese ABI y no solo arm64.
 
 ---
 
