@@ -92,6 +92,15 @@ class DashActivity : ComponentActivity() {
         // usuario abria otra app, y el radio dejaba de ser alcanzable justo
         // cuando mas falta hacia.
         EstadoActual.vista = dashView
+
+        // Ganchos para poder configurar el adaptador en remoto por el
+        // puente, sin ir al carro a tocar el selector.
+        EstadoActual.listarAdaptadores = { adaptadoresEmparejados() }
+        EstadoActual.elegirAdaptador = { mac -> elegirPorMac(mac) }
+        EstadoActual.buscarAdaptadores = { barrerBloqueando() }
+        EstadoActual.emparejarAdaptador = { mac -> emparejarBloqueando(mac) }
+        EstadoActual.olvidarAdaptador = { olvidar() }
+
         DashService.arrancar(this)
 
         // Mantener presionado para cambiar de adaptador: la unica
@@ -99,6 +108,17 @@ class DashActivity : ComponentActivity() {
         dashView.setOnLongClickListener {
             showPicker()
             true
+        }
+
+        // Un toque simple solo sirve cuando falta configurar algo. Sin esto,
+        // cancelar el selector dejaba la app en "sin enlace" sin ningun
+        // camino de vuelta visible: habia que adivinar lo del pulsado largo.
+        dashView.setOnClickListener {
+            when (EstadoActual.ultimo.connection) {
+                ConnectionState.SinAdaptador -> showPicker()
+                ConnectionState.BluetoothApagado -> startDash()
+                else -> Unit
+            }
         }
 
         ensurePermissions()
@@ -121,15 +141,41 @@ class DashActivity : ComponentActivity() {
     // --- Ciclo de vida del sondeo ------------------------------------------
 
     override fun onStop() {
+        runCatching { unregisterReceiver(bluetoothWatcher) }
         // Sin esto el sondeo sigue hablandole al adaptador con la app en
         // segundo plano: gasta bateria del carro y estorba a cualquier otra
         // app que quiera el mismo ELM327.
         scheduler?.stop()
+        // Y decirlo: el puente reportaba "Polling" con el sondeo ya parado,
+        // que es peor que no reportar nada.
+        publicarEstado(ConnectionState.Disconnected)
         super.onStop()
+    }
+
+    /**
+     * Vigila el interruptor de Bluetooth del radio.
+     *
+     * Encenderlo despues de abrir la app tiene que bastar para que el
+     * tablero se ponga en marcha, sin cerrarla y volverla a abrir.
+     */
+    private val bluetoothWatcher = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: android.content.Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val estado = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)
+            if (estado == BluetoothAdapter.STATE_ON) startDash()
+            if (estado == BluetoothAdapter.STATE_OFF) {
+                scheduler?.stop()
+                publicarEstado(ConnectionState.BluetoothApagado)
+            }
+        }
     }
 
     override fun onStart() {
         super.onStart()
+        registerReceiver(
+            bluetoothWatcher,
+            android.content.IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+        )
         chosen?.let { beginPolling(it) }
         revisarActualizacionUnaVez()
     }
@@ -154,6 +200,11 @@ class DashActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        EstadoActual.listarAdaptadores = null
+        EstadoActual.elegirAdaptador = null
+        EstadoActual.buscarAdaptadores = null
+        EstadoActual.emparejarAdaptador = null
+        EstadoActual.olvidarAdaptador = null
         // Soltar la vista para que no la retenga el servicio. El puente
         // seguira contestando el estado; solo dejara de haber captura, que
         // es la verdad: sin pantalla no hay nada que fotografiar.
@@ -184,9 +235,19 @@ class DashActivity : ComponentActivity() {
         if (missing.isEmpty()) startDash() else requestPermissions.launch(missing.toTypedArray())
     }
 
+    /**
+     * Decide que hacer segun lo que haya: adaptador guardado, Bluetooth
+     * apagado, o nada elegido todavia.
+     *
+     * Antes, si el Bluetooth estaba apagado en el instante del arranque, se
+     * mostraba un aviso y la app se rendia PARA SIEMPRE: no habia reintento
+     * ni forma de salir de ahi salvo matarla y volver a abrirla. Ahora deja
+     * el estado a la vista y se queda escuchando a que lo enciendan.
+     */
     private fun startDash() {
         val adapter = bluetoothAdapter
         if (adapter == null || !adapter.isEnabled) {
+            publicarEstado(ConnectionState.BluetoothApagado)
             toast(getString(R.string.enable_bluetooth))
             return
         }
@@ -196,8 +257,140 @@ class DashActivity : ComponentActivity() {
             beginPolling(saved)
             return
         }
-        // Primera vez: buscar y emparejar el adaptador desde aqui.
-        showPicker()
+        // Nada elegido todavia. No abrimos el selector a la fuerza: el
+        // tablero lo dice y se abre al tocarlo, para no secuestrar la
+        // pantalla cada vez que arranca el carro.
+        publicarEstado(ConnectionState.SinAdaptador)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun adaptadoresEmparejados(): List<String> {
+        val a = bluetoothAdapter ?: return emptyList()
+        if (!a.isEnabled) return listOf("BLUETOOTH APAGADO")
+        return runCatching {
+            a.bondedDevices.orEmpty().map { d ->
+                val marca = if (ObdPairing.looksLikeObd(d)) " [OBD?]" else ""
+                "${d.address}  ${runCatching { d.name }.getOrNull() ?: "?"}$marca"
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /** Elige un adaptador ya emparejado por su MAC y arranca el sondeo. */
+    @SuppressLint("MissingPermission")
+    private fun elegirPorMac(mac: String): Boolean {
+        val a = bluetoothAdapter ?: return false
+        val d = runCatching { a.getRemoteDevice(mac.trim().uppercase()) }.getOrNull()
+            ?: return false
+        prefs.edit().putString(KEY_DEVICE, d.address).apply()
+        chosen = d
+        // El sondeo tiene que arrancar en el hilo principal.
+        runOnUiThread { beginPolling(d) }
+        return true
+    }
+
+    /**
+     * Barre el aire y devuelve lo encontrado. Bloquea hasta terminar.
+     *
+     * Se llama desde el hilo de una peticion HTTP, no del de UI, asi que
+     * puede esperar sin congelar nada.
+     */
+    @SuppressLint("MissingPermission")
+    private fun barrerBloqueando(): List<String> {
+        val a = bluetoothAdapter ?: return listOf("ERROR: sin adaptador Bluetooth")
+        if (!a.isEnabled) return listOf("ERROR: Bluetooth apagado")
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            val ok = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            // Decirlo en vez de devolver una lista vacia: sin este permiso
+            // startDiscovery no falla, simplemente no encuentra nada, y eso
+            // es indistinguible de "no hay adaptadores cerca".
+            if (!ok) return listOf("ERROR: falta permiso de ubicacion (necesario para barrer en Android 11)")
+        }
+
+        val encontrados = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val fin = java.util.concurrent.CountDownLatch(1)
+        val p = pairing ?: ObdPairing(this, a).also { pairing = it }
+
+        runOnUiThread {
+            p.start(object : ObdPairing.Listener {
+                override fun onDevices(devices: List<BluetoothDevice>) {
+                    devices.forEach { d ->
+                        val marca = if (ObdPairing.looksLikeObd(d)) " [OBD?]" else ""
+                        val emp = if (d.bondState == BluetoothDevice.BOND_BONDED) " (emparejado)" else ""
+                        encontrados[d.address] =
+                            "${d.address}  ${runCatching { d.name }.getOrNull() ?: "?"}$marca$emp"
+                    }
+                }
+                override fun onBonded(device: BluetoothDevice) = Unit
+                override fun onBondFailed(device: BluetoothDevice) = Unit
+                override fun onScanFinished() { fin.countDown() }
+            })
+            p.scan()
+        }
+
+        fin.await(25, java.util.concurrent.TimeUnit.SECONDS)
+        return encontrados.values.sortedByDescending { it.contains("[OBD?]") }
+    }
+
+    /** Empareja por MAC contestando el PIN, y si cuaja lo deja elegido. */
+    @SuppressLint("MissingPermission")
+    private fun emparejarBloqueando(mac: String): String {
+        val a = bluetoothAdapter ?: return "sin adaptador Bluetooth"
+        val d = runCatching { a.getRemoteDevice(mac.trim().uppercase()) }.getOrNull()
+            ?: return "MAC invalida"
+
+        if (d.bondState == BluetoothDevice.BOND_BONDED) {
+            return if (elegirPorMac(d.address)) "ya estaba emparejado; elegido" else "fallo al elegir"
+        }
+
+        val fin = java.util.concurrent.CountDownLatch(1)
+        val salida = java.util.concurrent.atomic.AtomicReference("sin respuesta")
+        val p = pairing ?: ObdPairing(this, a).also { pairing = it }
+
+        runOnUiThread {
+            p.start(object : ObdPairing.Listener {
+                override fun onDevices(devices: List<BluetoothDevice>) = Unit
+                override fun onBonded(device: BluetoothDevice) {
+                    salida.set("emparejado")
+                    fin.countDown()
+                }
+                override fun onBondFailed(device: BluetoothDevice) {
+                    salida.set("fallo el emparejamiento (PIN?)")
+                    fin.countDown()
+                }
+                override fun onScanFinished() = Unit
+            })
+            p.bond(d)
+        }
+
+        fin.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        val traza = p.traza.joinToString(" | ")
+        val estadoFinal = runCatching { d.bondState }.getOrNull()
+        if (salida.get() == "emparejado" || estadoFinal == BluetoothDevice.BOND_BONDED) {
+            val elegido = elegirPorMac(d.address)
+            return "emparejado${if (elegido) " y elegido" else ", fallo al elegir"} :: $traza"
+        }
+        return "${salida.get()} (bondState=$estadoFinal) :: $traza"
+    }
+
+    /** Olvida el adaptador: util cuando se guardo el equivocado. */
+    private fun olvidar() {
+        prefs.edit().remove(KEY_DEVICE).apply()
+        chosen = null
+        EstadoActual.adaptadorElegido = null
+        runOnUiThread {
+            scheduler?.stop()
+            publicarEstado(ConnectionState.SinAdaptador)
+        }
+    }
+
+    /** Refleja en el tablero un estado que no viene del scheduler. */
+    private fun publicarEstado(estado: ConnectionState) {
+        val nuevo = (scheduler?.state?.value ?: EstadoActual.ultimo).copy(connection = estado)
+        EstadoActual.ultimo = nuevo
+        dashView.setState(nuevo)
     }
 
     @SuppressLint("MissingPermission")
@@ -254,7 +447,16 @@ class DashActivity : ComponentActivity() {
             .setAdapter(names) { _, i -> shown.getOrNull(i)?.let { p.bond(it) } }
             .setNeutralButton(R.string.scan) { _, _ -> beginScan() }
             .setNegativeButton(android.R.string.cancel, null)
-            .setOnDismissListener { goImmersive() }
+            .setOnDismissListener {
+                goImmersive()
+                // Soltar el receptor de emparejamiento: dejarlo vivo hacia
+                // que cualquier dispositivo que se emparejara despues se
+                // tomara por el adaptador OBD.
+                if (chosen == null) {
+                    p.stop()
+                    publicarEstado(ConnectionState.SinAdaptador)
+                }
+            }
             .create()
             .also { it.show() }
 
@@ -289,7 +491,10 @@ class DashActivity : ComponentActivity() {
 
     // --- Sondeo -------------------------------------------------------------
 
+    @SuppressLint("MissingPermission")
     private fun beginPolling(device: BluetoothDevice) {
+        EstadoActual.adaptadorElegido =
+            "${runCatching { device.name }.getOrNull() ?: "?"} (${device.address})"
         scheduler?.stop()
         val adapter = bluetoothAdapter
         val fresh = PollScheduler(

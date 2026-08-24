@@ -135,15 +135,29 @@ class UpdateChecker(private val context: Context) {
      * una y otra vez.
      */
     private fun sePuedeIntentar(version: Int): Boolean {
-        val intentos = prefs.getInt(KEY_INTENTOS + version, 0)
-        if (intentos >= MAX_INTENTOS) {
-            UpdateState.note("v$version abandonada tras $intentos intentos")
-            return false
-        }
         val ultimo = prefs.getLong(KEY_ULTIMO + version, 0)
-        val espera = System.currentTimeMillis() - ultimo
-        if (ultimo != 0L && espera < ESPERA_TRAS_FALLO_MS) {
-            UpdateState.note("v$version en espera (${(ESPERA_TRAS_FALLO_MS - espera) / 1000}s)")
+        val desde = System.currentTimeMillis() - ultimo
+        val intentos = prefs.getInt(KEY_INTENTOS + version, 0)
+
+        // Tras muchos intentos se descansa MUCHO, pero nunca para siempre.
+        // La primera version de este freno abandonaba la version de forma
+        // definitiva, y sin manera de reiniciar el contador desde fuera:
+        // un fallo pasajero —el confirmador aun sin activar, por ejemplo—
+        // dejaba el radio sin canal de actualizacion hasta ir al carro.
+        if (intentos >= MAX_INTENTOS) {
+            if (desde < DESCANSO_LARGO_MS) {
+                UpdateState.note(
+                    "v$version en descanso largo (${(DESCANSO_LARGO_MS - desde) / 60_000} min)"
+                )
+                return false
+            }
+            UpdateState.note("v$version: se acabo el descanso, reintentando")
+            prefs.edit().putInt(KEY_INTENTOS + version, 0).apply()
+            return true
+        }
+
+        if (ultimo != 0L && desde < ESPERA_TRAS_FALLO_MS) {
+            UpdateState.note("v$version en espera (${(ESPERA_TRAS_FALLO_MS - desde) / 1000}s)")
             return false
         }
         return true
@@ -233,7 +247,14 @@ class UpdateChecker(private val context: Context) {
         /** Tras un intento fallido, no volver a molestar en 10 minutos. */
         const val ESPERA_TRAS_FALLO_MS = 10 * 60 * 1000L
 
-        /** Tres intentos y esa version se abandona hasta que salga otra. */
+        /** Tras tres intentos seguidos se pasa al descanso largo. */
         const val MAX_INTENTOS = 3
+
+        /**
+         * Descanso tras agotar los intentos. Largo, para no dar la lata,
+         * pero finito: abandonar una version para siempre deja el radio
+         * incomunicado sin forma de recuperarlo en remoto.
+         */
+        const val DESCANSO_LARGO_MS = 6 * 60 * 60 * 1000L
     }
 }

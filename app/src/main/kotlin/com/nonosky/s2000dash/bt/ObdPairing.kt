@@ -38,6 +38,32 @@ class ObdPairing(
     private var pinAttempt = 0
     private var registered = false
 
+    /**
+     * El dispositivo que el usuario eligio de la lista.
+     *
+     * Sin esto, CUALQUIER emparejamiento del radio se tomaba por el
+     * adaptador OBD: bastaba emparejar un telefono para escuchar musica
+     * para que su MAC quedara guardada como el adaptador, sobreviviendo a
+     * todos los reinicios y dejando el tablero en "sin enlace" para
+     * siempre, sin manera de saber por que.
+     */
+    private var objetivo: String? = null
+
+    /**
+     * Traza de lo ultimo que hizo el emparejamiento.
+     *
+     * Sin esto, un emparejamiento que no cuaja es una caja negra: no se
+     * sabe si el sistema pidio un PIN, una comparacion numerica, o si
+     * createBond ni siquiera arranco.
+     */
+    val traza = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+    private fun trazar(t: String) {
+        if (traza.size > 40) traza.removeAt(0)
+        traza.add(t)
+        Log.i(TAG, t)
+    }
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
             val device: BluetoothDevice? =
@@ -60,25 +86,32 @@ class ObdPairing(
                     // Solo el emparejamiento con PIN se puede contestar sin
                     // permisos de sistema. Si es otra variante, dejamos que
                     // salga el dialogo de Android en vez de estorbar.
-                    if (variant != PAIRING_VARIANT_PIN) return
+                    trazar("PAIRING_REQUEST variante=$variant de ${device.address}")
+                    if (variant != PAIRING_VARIANT_PIN) {
+                        trazar("variante $variant no es PIN: la contesta el sistema, no nosotros")
+                        return
+                    }
                     val pin = COMMON_PINS.getOrNull(pinAttempt) ?: return
-                    Log.i(TAG, "Contestando PIN '$pin' a ${device.address}")
+                    trazar("contestando PIN '$pin'")
                     runCatching {
-                        device.setPin(pin.toByteArray(Charsets.US_ASCII))
+                        val ok = device.setPin(pin.toByteArray(Charsets.US_ASCII))
+                        trazar("setPin devolvio $ok")
                         // Silenciar el dialogo del sistema si el broadcast es
                         // ordenado; si no lo es, esto tira y no pasa nada.
                         abortBroadcast()
-                    }
+                    }.onFailure { trazar("setPin fallo: ${it.message}") }
                 }
 
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
                     device ?: return
+                    // Solo nos importa el que el usuario eligio.
+                    if (objetivo != null && device.address != objetivo) return
                     val bond = intent.getIntExtra(
                         BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR
                     )
+                    trazar("BOND_STATE=$bond para ${device.address}")
                     when (bond) {
                         BluetoothDevice.BOND_BONDED -> {
-                            Log.i(TAG, "Emparejado ${device.address}")
                             pinAttempt = 0
                             listener?.onBonded(device)
                         }
@@ -122,20 +155,27 @@ class ObdPairing(
     }
 
     fun bond(device: BluetoothDevice) {
+        objetivo = device.address
         // El barrido activo destroza el throughput y el emparejamiento.
         runCatching { adapter.cancelDiscovery() }
         if (device.bondState == BluetoothDevice.BOND_BONDED) {
             listener?.onBonded(device)
             return
         }
-        runCatching { device.createBond() }
-            .onFailure {
-                Log.w(TAG, "createBond fallo: ${it.message}")
-                listener?.onBondFailed(device)
-            }
+        traza.clear()
+        trazar("createBond() sobre ${device.address}")
+        runCatching {
+            val ok = device.createBond()
+            trazar("createBond devolvio $ok")
+            if (!ok) listener?.onBondFailed(device)
+        }.onFailure {
+            trazar("createBond lanzo: ${it.message}")
+            listener?.onBondFailed(device)
+        }
     }
 
     fun stop() {
+        objetivo = null
         runCatching { adapter.cancelDiscovery() }
         if (registered) {
             runCatching { context.unregisterReceiver(receiver) }

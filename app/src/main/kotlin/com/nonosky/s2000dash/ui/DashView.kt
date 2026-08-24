@@ -370,10 +370,16 @@ class DashView @JvmOverloads constructor(
 
     /** Un punto de color y una palabra: basta para saber si el dato es vivo. */
     private fun drawConnectionBadge(canvas: Canvas, left: Float, ancho: Float, h: Float) {
+        // El texto tiene que decir QUE HACER, no solo que algo va mal. Un
+        // "SIN ENLACE" identico para "no hay adaptador elegido" y para "el
+        // adaptador no contesta" deja al conductor sin saber si le toca
+        // configurar algo o esperar.
         val (color, texto) = when (state.connection) {
             ConnectionState.Polling -> COLOR_GREEN to (state.protocol?.take(22) ?: "EN LINEA")
             ConnectionState.Initializing -> COLOR_AMBER to "INICIANDO"
             ConnectionState.Connecting -> COLOR_AMBER to "CONECTANDO"
+            ConnectionState.SinAdaptador -> COLOR_VTEC_ON to "TOCA PARA ELEGIR ADAPTADOR"
+            ConnectionState.BluetoothApagado -> COLOR_AMBER to "ENCIENDE EL BLUETOOTH"
             ConnectionState.Disconnected -> COLOR_REDLINE to "SIN ENLACE"
         }
         val r = h * 0.018f

@@ -1,7 +1,20 @@
 package com.nonosky.s2000dash
 
-/** Ver §9 del diseño: la rueda de estados de la conexion. */
+/**
+ * Ver §9 del diseño: la rueda de estados de la conexion.
+ *
+ * Los dos primeros no son fallos de enlace sino de configuracion, y se
+ * distinguen a proposito: el tablero decia "SIN ENLACE" tanto si el
+ * adaptador no respondia como si nunca se habia elegido uno, y no habia
+ * manera de saber cual de las dos cosas pasaba ni que hacer al respecto.
+ */
 enum class ConnectionState {
+    /** No se ha elegido adaptador todavia. Hace falta tocar el tablero. */
+    SinAdaptador,
+
+    /** El Bluetooth del radio esta apagado. */
+    BluetoothApagado,
+
     Disconnected,
     Connecting,
     Initializing,

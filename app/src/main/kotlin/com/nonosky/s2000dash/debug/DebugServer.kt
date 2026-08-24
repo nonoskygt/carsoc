@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.View
+import com.nonosky.s2000dash.EstadoActual
 import com.nonosky.s2000dash.VehicleState
 import com.nonosky.s2000dash.selfupdate.UpdateChecker
 import com.nonosky.s2000dash.selfupdate.UpdateState
@@ -50,10 +51,28 @@ class DebugServer(
         if (running) return
         running = true
         thread(name = "debug-server", isDaemon = true) {
+            // Reintentar el bind: si el puerto sigue ocupado por la instancia
+            // anterior —al recrearse el servicio, por ejemplo— rendirse a la
+            // primera dejaba el radio incomunicado y en silencio, sin ninguna
+            // señal de que el puente no estaba.
+            var s: ServerSocket? = null
+            for (intento in 1..REINTENTOS_BIND) {
+                if (!running) return@thread
+                s = runCatching {
+                    ServerSocket().apply {
+                        reuseAddress = true
+                        bind(InetSocketAddress(port))
+                    }
+                }.getOrNull()
+                if (s != null) break
+                Log.w(TAG, "Puerto $port ocupado; reintento $intento")
+                Thread.sleep(2_000)
+            }
+            if (s == null) {
+                Log.w(TAG, "No se pudo abrir el puerto $port tras $REINTENTOS_BIND intentos")
+                return@thread
+            }
             try {
-                val s = ServerSocket()
-                s.reuseAddress = true
-                s.bind(InetSocketAddress(port))
                 server = s
                 Log.i(TAG, "Puente de diagnostico en el puerto $port")
                 while (running) {
@@ -74,7 +93,9 @@ class DebugServer(
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "No se pudo abrir el puerto $port: ${e.message}")
+                Log.w(TAG, "Puente caido: ${e.message}")
+            } finally {
+                runCatching { s.close() }
             }
         }
     }
@@ -87,10 +108,14 @@ class DebugServer(
 
     private fun handle(client: Socket) {
         client.use { sock ->
-            sock.soTimeout = 5_000
+            // El barrido de Bluetooth tarda; el resto de rutas contestan al
+            // instante, asi que un timeout largo aqui no cuesta nada.
+            sock.soTimeout = 40_000
             val reader = sock.getInputStream().bufferedReader()
             val request = readLineAcotada(reader) ?: return
-            val path = request.split(" ").getOrNull(1)?.substringBefore('?') ?: "/"
+            val ruta = request.split(" ").getOrNull(1) ?: "/"
+            val path = ruta.substringBefore('?')
+            val consulta = parametros(ruta)
             // Consumir el resto de cabeceras para que el cliente no vea RST.
             var cabeceras = 0
             while (cabeceras++ < MAX_CABECERAS) {
@@ -110,6 +135,40 @@ class DebugServer(
                     val png = screenshot()
                     if (png == null) sendText(out, 503, "text/plain", "sin vista que dibujar")
                     else sendBytes(out, 200, "image/png", png)
+                }
+                "/adaptadores" -> {
+                    val lista = runCatching { EstadoActual.listarAdaptadores?.invoke() }
+                        .getOrNull() ?: emptyList()
+                    sendText(out, 200, "application/json",
+                        org.json.JSONArray(lista).toString(2))
+                }
+                "/elegir" -> {
+                    val mac = consulta["mac"]
+                    val ok = if (mac.isNullOrBlank()) false
+                    else runCatching { EstadoActual.elegirAdaptador?.invoke(mac) }
+                        .getOrNull() ?: false
+                    sendText(out, if (ok) 200 else 400, "application/json",
+                        """{"elegido":$ok,"mac":${org.json.JSONObject.quote(mac ?: "")}}""")
+                }
+                "/buscar" -> {
+                    // Bloquea unos segundos mientras barre; por eso el
+                    // timeout del socket es generoso en esta ruta.
+                    val lista = runCatching { EstadoActual.buscarAdaptadores?.invoke() }
+                        .getOrNull() ?: emptyList()
+                    sendText(out, 200, "application/json",
+                        org.json.JSONArray(lista).toString(2))
+                }
+                "/emparejar" -> {
+                    val mac = consulta["mac"]
+                    val res = if (mac.isNullOrBlank()) "falta mac"
+                    else runCatching { EstadoActual.emparejarAdaptador?.invoke(mac) }
+                        .getOrNull() ?: "sin pantalla"
+                    sendText(out, 200, "application/json",
+                        """{"resultado":${org.json.JSONObject.quote(res)}}""")
+                }
+                "/olvidar" -> {
+                    runCatching { EstadoActual.olvidarAdaptador?.invoke() }
+                    sendText(out, 200, "application/json", """{"olvidado":true}""")
                 }
                 "/" -> sendText(out, 200, "text/plain", HELP)
                 else -> sendText(out, 404, "text/plain", "no existe: $path")
@@ -136,11 +195,29 @@ class DebugServer(
         return sb.toString()
     }
 
+    /** Parametros de la URL, sin dependencias externas. */
+    private fun parametros(ruta: String): Map<String, String> {
+        val q = ruta.substringAfter('?', "")
+        if (q.isBlank()) return emptyMap()
+        return q.split('&').mapNotNull { par ->
+            val i = par.indexOf('=')
+            if (i <= 0) null
+            else runCatching {
+                java.net.URLDecoder.decode(par.substring(0, i), "UTF-8") to
+                    java.net.URLDecoder.decode(par.substring(i + 1), "UTF-8")
+            }.getOrNull()
+        }.toMap()
+    }
+
     private fun stateJson(): String {
         val s = stateProvider()
         val u = updaterProvider()
         return JSONObject().apply {
             put("connection", s.connection.name)
+            // Si la pantalla no esta, no hay sondeo: decirlo en vez de dejar
+            // que el ultimo estado bueno pase por actual.
+            put("pantallaViva", viewProvider() != null)
+            put("adaptador", EstadoActual.adaptadorElegido ?: JSONObject.NULL)
             put("protocol", s.protocol ?: JSONObject.NULL)
             put("rpm", s.rpm ?: JSONObject.NULL)
             put("speedKmh", s.speedKmh ?: JSONObject.NULL)
@@ -219,6 +296,7 @@ class DebugServer(
     private companion object {
         const val TAG = "DebugServer"
         const val PORT = 8099
+        const val REINTENTOS_BIND = 10
         const val MAX_LINEA = 4_096
         const val MAX_CABECERAS = 64
         val HELP = """
@@ -227,6 +305,11 @@ class DebugServer(
               /shot.png  el tablero tal como se ve ahora
               /log       bitacora de actualizaciones
               /update    busca e instala version nueva
+              /adaptadores  adaptadores Bluetooth emparejados
+              /elegir?mac=  elige adaptador OBD ya emparejado
+              /buscar       barre el aire en busca de adaptadores
+              /emparejar?mac=  empareja y elige
+              /olvidar      olvida el adaptador guardado
         """.trimIndent()
     }
 }
