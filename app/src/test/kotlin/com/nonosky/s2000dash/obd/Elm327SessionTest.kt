@@ -61,6 +61,7 @@ class Elm327SessionTest {
                 }
             }
             override fun readUntilPrompt(timeoutMs: Long) = pending.also { pending = "" }
+            override fun drain() {}
             override fun close() {}
         }
 
@@ -96,6 +97,7 @@ class Elm327SessionTest {
             override fun connect() {}
             override fun write(bytes: ByteArray) = throw java.io.IOException("cable jalado")
             override fun readUntilPrompt(timeoutMs: Long) = ""
+            override fun drain() {}
             override fun close() {}
         }
         // La regla dura de §10: nunca se propaga una excepcion a la UI.
@@ -116,5 +118,28 @@ class Elm327SessionTest {
         Elm327Session(t).query("010C")
         // FakeTransport recorta, asi que verificamos por el lado del contenido.
         assertEquals("010C", t.written.last())
+    }
+
+    @Test
+    fun `se drena el buffer antes de cada comando`() {
+        // Regresion: si una respuesta se corto por timeout, su cola —con su
+        // prompt '>'— se queda en el socket y la siguiente lectura termina
+        // con ESE prompt viejo. El desfase de un turno no se corrige solo:
+        // cada PID quedaria leyendo lo que contesto el anterior, para siempre.
+        val t = FakeTransport(okScript())
+        Elm327Session(t).query("010C")
+        assertEquals("debio drenar una vez por comando", t.written.size, t.drains.size)
+    }
+
+    @Test
+    fun `el banner BUS INIT no tumba la comprobacion del bus`() {
+        // Con ISO 9141-2 la primera peticion SIEMPRE trae este banner. Si se
+        // tomaba por error, initialize() creia que el bus no responde y caia
+        // a ATSP0 en un enlace que estaba perfecto.
+        val t = FakeTransport(okScript(mapOf("010C" to "BUS INIT: ...OK\r41 0C 1A F8\r\r>")))
+        val info = Elm327Session(t).initialize()
+
+        assertFalse("no debio caer a automatico", info.usedFallback)
+        assertFalse("no debio mandar ATSP0", t.written.contains("ATSP0"))
     }
 }

@@ -109,10 +109,34 @@ class PidDecoderTest {
             "41",            // truncado antes del PID
             "ZZZZ",          // ruido no hexadecimal
             "410D64",        // respuesta de OTRO pid
+            "BUS INIT: ERROR\r\r>",
+            "SEARCHING...\rUNABLE TO CONNECT\r\r>",
         )
         for (s in basura) {
             assertNull("debio ser null para '$s'", PidDecoder.decodeRpm(s))
         }
+    }
+
+    // --- Banners de progreso que PRECEDEN a datos validos -------------------
+
+    @Test
+    fun `BUS INIT antes de la trama no invalida la lectura`() {
+        // En ISO 9141-2 la PRIMERA peticion de cada conexion siempre trae
+        // este banner. Tratarlo como error tiraba justo la lectura con la
+        // que se comprueba que el bus responde, y el enlace bueno se
+        // declaraba muerto.
+        assertEquals(1726, PidDecoder.decodeRpm("BUS INIT: ...OK\r41 0C 1A F8\r\r>"))
+    }
+
+    @Test
+    fun `SEARCHING antes de la trama no invalida la lectura`() {
+        // Con ATSP0 cada peticion durante la busqueda lleva este banner.
+        assertEquals(1726, PidDecoder.decodeRpm("SEARCHING...\r41 0C 1A F8\r\r>"))
+    }
+
+    @Test
+    fun `banner mas eco mas trama, todo junto`() {
+        assertEquals(100, PidDecoder.decodeSpeed("010D\rSEARCHING...\r41 0D 64\r\r>"))
     }
 
     @Test
@@ -132,9 +156,13 @@ class PidDecoderTest {
     }
 
     @Test
-    fun `SEARCHING pegado a una respuesta valida se descarta`() {
-        // Preferimos perder una muestra a mostrar un numero que quiza no sea.
-        assertNull(PidDecoder.decodeRpm("SEARCHING...410C1AF8"))
+    fun `un banner sin trama detras si es null`() {
+        // Este test antes afirmaba lo contrario — que cualquier respuesta que
+        // mencionara SEARCHING o BUS INIT se tiraba entera. Era el error:
+        // esos banners PRECEDEN a la trama buena, no la sustituyen. Lo que
+        // de verdad define que no hay muestra es que no venga ninguna trama.
+        assertNull(PidDecoder.decodeRpm("SEARCHING...\r\r>"))
+        assertNull(PidDecoder.decodeRpm("BUS INIT: ...OK\r\r>"))
     }
 
     // --- Voltaje ------------------------------------------------------------

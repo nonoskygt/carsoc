@@ -1,0 +1,177 @@
+package com.nonosky.s2000dash.bt
+
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.util.Log
+
+/**
+ * Busca y empareja el adaptador OBD desde dentro de la app.
+ *
+ * Existe para no mandar al usuario a Ajustes de Bluetooth: en el carro, con
+ * el motor prendido, irse a otra app y volver es justo lo que no queremos.
+ *
+ * Tambien contesta solo el PIN. Los clones de ELM327 usan siempre uno de
+ * tres, y son emparejamiento legado (PIN numerico), no comparacion numerica
+ * — asi que [BluetoothDevice.setPin] alcanza y no hace falta ser sistema.
+ */
+@SuppressLint("MissingPermission")
+class ObdPairing(
+    private val context: Context,
+    private val adapter: BluetoothAdapter,
+) {
+
+    interface Listener {
+        /** Lista viva de candidatos: emparejados primero, luego encontrados. */
+        fun onDevices(devices: List<BluetoothDevice>)
+        fun onBonded(device: BluetoothDevice)
+        fun onBondFailed(device: BluetoothDevice)
+        fun onScanFinished()
+    }
+
+    private var listener: Listener? = null
+    private val found = LinkedHashMap<String, BluetoothDevice>()
+    private var pinAttempt = 0
+    private var registered = false
+
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            val device: BluetoothDevice? =
+                intent?.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+
+            when (intent?.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    device ?: return
+                    found[device.address] = device
+                    emit()
+                }
+
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> listener?.onScanFinished()
+
+                BluetoothDevice.ACTION_PAIRING_REQUEST -> {
+                    device ?: return
+                    val variant = intent.getIntExtra(
+                        BluetoothDevice.EXTRA_PAIRING_VARIANT, -1
+                    )
+                    // Solo el emparejamiento con PIN se puede contestar sin
+                    // permisos de sistema. Si es otra variante, dejamos que
+                    // salga el dialogo de Android en vez de estorbar.
+                    if (variant != PAIRING_VARIANT_PIN) return
+                    val pin = COMMON_PINS.getOrNull(pinAttempt) ?: return
+                    Log.i(TAG, "Contestando PIN '$pin' a ${device.address}")
+                    runCatching {
+                        device.setPin(pin.toByteArray(Charsets.US_ASCII))
+                        // Silenciar el dialogo del sistema si el broadcast es
+                        // ordenado; si no lo es, esto tira y no pasa nada.
+                        abortBroadcast()
+                    }
+                }
+
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                    device ?: return
+                    val bond = intent.getIntExtra(
+                        BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR
+                    )
+                    when (bond) {
+                        BluetoothDevice.BOND_BONDED -> {
+                            Log.i(TAG, "Emparejado ${device.address}")
+                            pinAttempt = 0
+                            listener?.onBonded(device)
+                        }
+                        BluetoothDevice.BOND_NONE -> {
+                            // Volvio a cero: o el PIN estaba mal o lo rechazo.
+                            pinAttempt++
+                            if (pinAttempt < COMMON_PINS.size) {
+                                Log.i(TAG, "PIN rechazado, probando el siguiente")
+                                bond(device)
+                            } else {
+                                pinAttempt = 0
+                                listener?.onBondFailed(device)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun start(listener: Listener) {
+        this.listener = listener
+        if (!registered) {
+            context.registerReceiver(receiver, IntentFilter().apply {
+                addAction(BluetoothDevice.ACTION_FOUND)
+                addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+                addAction(BluetoothDevice.ACTION_PAIRING_REQUEST)
+                addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+            })
+            registered = true
+        }
+        emit()
+    }
+
+    /** Arranca el barrido. Requiere permiso de ubicacion en API 30 o menor. */
+    fun scan() {
+        runCatching {
+            if (adapter.isDiscovering) adapter.cancelDiscovery()
+            adapter.startDiscovery()
+        }.onFailure { Log.w(TAG, "No se pudo barrer: ${it.message}") }
+    }
+
+    fun bond(device: BluetoothDevice) {
+        // El barrido activo destroza el throughput y el emparejamiento.
+        runCatching { adapter.cancelDiscovery() }
+        if (device.bondState == BluetoothDevice.BOND_BONDED) {
+            listener?.onBonded(device)
+            return
+        }
+        runCatching { device.createBond() }
+            .onFailure {
+                Log.w(TAG, "createBond fallo: ${it.message}")
+                listener?.onBondFailed(device)
+            }
+    }
+
+    fun stop() {
+        runCatching { adapter.cancelDiscovery() }
+        if (registered) {
+            runCatching { context.unregisterReceiver(receiver) }
+            registered = false
+        }
+        listener = null
+    }
+
+    private fun emit() {
+        val bonded = runCatching { adapter.bondedDevices.orEmpty().toList() }
+            .getOrDefault(emptyList())
+        val bondedAddrs = bonded.map { it.address }.toSet()
+        val todos = bonded + found.values.filter { it.address !in bondedAddrs }
+        // Los que parecen adaptadores OBD van arriba: en una pantalla de
+        // carro, la primera fila es la que se toca sin pensar.
+        listener?.onDevices(todos.sortedByDescending { looksLikeObd(it) })
+    }
+
+    companion object {
+        private const val TAG = "ObdPairing"
+
+        /** Constante publica de la plataforma, replicada para no depender de API. */
+        private const val PAIRING_VARIANT_PIN = 0
+
+        /** Los tres PIN que traen practicamente todos los clones de ELM327. */
+        val COMMON_PINS = listOf("1234", "6789", "0000")
+
+        private val OBD_HINTS = listOf(
+            "OBD", "ELM", "VLINK", "V-LINK", "VGATE", "KONNWEI",
+            "STEREN", "SCAN", "ICAR", "VEEPEAK",
+        )
+
+        @SuppressLint("MissingPermission")
+        fun looksLikeObd(device: BluetoothDevice): Boolean {
+            val name = runCatching { device.name }.getOrNull()?.uppercase() ?: return false
+            return OBD_HINTS.any { name.replace(" ", "").contains(it) }
+        }
+    }
+}

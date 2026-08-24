@@ -1,5 +1,6 @@
 package com.nonosky.s2000dash.obd
 
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -95,5 +96,51 @@ class PollSchedulerTest {
         assertEquals(10_000L, s.backoffMs(4))
         assertEquals(10_000L, s.backoffMs(99))
         scope.cancel()
+    }
+
+    @Test(timeout = 10_000)
+    fun `el sondeo no corre en el hilo del scope que lo lanza`() {
+        // Regresion de un defecto critico: el scope que recibe PollScheduler
+        // es lifecycleScope, que despacha en el hilo PRINCIPAL. Como todo el
+        // sondeo es I/O bloqueante (BluetoothSocket, sleeps), correrlo ahi
+        // congelaba la UI y daba ANR en cuanto conectaba el adaptador.
+        val hiloDelScope = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "falso-main")
+        }
+        val scope = kotlinx.coroutines.CoroutineScope(
+            hiloDelScope.asCoroutineDispatcher()
+        )
+
+        val visto = java.util.concurrent.atomic.AtomicReference<String>()
+        val llego = java.util.concurrent.CountDownLatch(1)
+
+        val s = PollScheduler(
+            transportFactory = {
+                object : ObdTransport {
+                    override val isConnected = true
+                    override fun connect() {
+                        visto.compareAndSet(null, Thread.currentThread().name)
+                        llego.countDown()
+                        throw java.io.IOException("basta")
+                    }
+                    override fun write(bytes: ByteArray) {}
+                    override fun readUntilPrompt(timeoutMs: Long) = ""
+                    override fun drain() {}
+                    override fun close() {}
+                }
+            },
+            scope = scope,
+        )
+
+        s.start()
+        assertTrue("nunca intento conectar", llego.await(8, java.util.concurrent.TimeUnit.SECONDS))
+        s.stop()
+        scope.cancel()
+        hiloDelScope.shutdownNow()
+
+        assertTrue(
+            "el I/O bloqueante corrio en el hilo del scope (seria el Main real): ${visto.get()}",
+            visto.get() != null && visto.get() != "falso-main",
+        )
     }
 }

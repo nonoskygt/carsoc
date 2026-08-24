@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">S2000 Dash</string>
-    <string name="choose_adapter">Elige el adaptador OBD</string>
+    <string name="choose_adapter">Adaptador OBD</string>
     <string name="needs_bluetooth">Sin permiso de Bluetooth no hay tablero</string>
+    <string name="needs_location_scan">Android pide permiso de ubicación para buscar por Bluetooth</string>
     <string name="enable_bluetooth">Enciende el Bluetooth</string>
-    <string name="pair_first">Empareja primero el adaptador OBD en Ajustes de Bluetooth</string>
+    <string name="scan">Buscar</string>
+    <string name="bonded">emparejado</string>
+    <string name="tap_to_pair">tocar para emparejar</string>
+    <string name="paired_with">Emparejado con %1$s</string>
+    <string name="pair_failed">No se pudo emparejar. Revisa que el adaptador esté encendido.</string>
+    <string name="nothing_found">No apareció ningún dispositivo</string>
 </resources>

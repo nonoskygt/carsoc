@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,9 +23,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.nonosky.s2000dash.bt.ObdPairing
 import com.nonosky.s2000dash.obd.PollScheduler
 import com.nonosky.s2000dash.obd.SppTransport
 import com.nonosky.s2000dash.ui.DashView
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -32,12 +35,19 @@ import kotlinx.coroutines.launch
  *
  * Se encarga de lo que solo Android puede dar: pantalla encendida, inmersivo
  * horizontal, permisos de Bluetooth en los dos modelos (el viejo y el de
- * Android 12+), y recordar cual adaptador se eligio.
+ * Android 12+), buscar y emparejar el adaptador, y recordar cual se eligio.
  */
 class DashActivity : ComponentActivity() {
 
     private lateinit var dashView: DashView
     private var scheduler: PollScheduler? = null
+    private var observeJob: Job? = null
+
+    private var pairing: ObdPairing? = null
+    private var pickerDialog: AlertDialog? = null
+
+    /** El adaptador elegido, para poder arrancar y parar con el ciclo de vida. */
+    private var chosen: BluetoothDevice? = null
 
     private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
 
@@ -55,6 +65,13 @@ class DashActivity : ComponentActivity() {
         }
     }
 
+    /** Ubicacion: en API 30 y menores, sin ella el barrido no devuelve nada. */
+    private val requestScanPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) pairing?.scan() else toast(getString(R.string.needs_location_scan))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -69,7 +86,7 @@ class DashActivity : ComponentActivity() {
         // Mantener presionado para cambiar de adaptador: la unica
         // configuracion que existe, escondida donde no estorba al manejar.
         dashView.setOnLongClickListener {
-            pickDevice(force = true)
+            showPicker()
             true
         }
 
@@ -89,6 +106,32 @@ class DashActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) goImmersive()
     }
+
+    // --- Ciclo de vida del sondeo ------------------------------------------
+
+    override fun onStop() {
+        // Sin esto el sondeo sigue hablandole al adaptador con la app en
+        // segundo plano: gasta bateria del carro y estorba a cualquier otra
+        // app que quiera el mismo ELM327.
+        scheduler?.stop()
+        super.onStop()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        chosen?.let { beginPolling(it) }
+    }
+
+    override fun onDestroy() {
+        pickerDialog?.dismiss()
+        pickerDialog = null
+        pairing?.stop()
+        pairing = null
+        scheduler?.stop()
+        super.onDestroy()
+    }
+
+    // --- Permisos -----------------------------------------------------------
 
     private fun requiredPermissions(): Array<String> =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -112,12 +155,14 @@ class DashActivity : ComponentActivity() {
             toast(getString(R.string.enable_bluetooth))
             return
         }
-        val device = savedDevice(adapter)
-        if (device == null) {
-            pickDevice(force = false)
+        val saved = savedDevice(adapter)
+        if (saved != null) {
+            chosen = saved
+            beginPolling(saved)
             return
         }
-        beginPolling(device)
+        // Primera vez: buscar y emparejar el adaptador desde aqui.
+        showPicker()
     }
 
     @SuppressLint("MissingPermission")
@@ -126,34 +171,88 @@ class DashActivity : ComponentActivity() {
         return runCatching { adapter.getRemoteDevice(mac) }.getOrNull()
     }
 
+    // --- Elegir y emparejar el adaptador ------------------------------------
+
     @SuppressLint("MissingPermission")
-    private fun pickDevice(force: Boolean) {
+    private fun showPicker() {
         val adapter = bluetoothAdapter ?: return
-        val bonded = runCatching { adapter.bondedDevices.orEmpty().toList() }.getOrDefault(emptyList())
-
-        if (bonded.isEmpty()) {
-            toast(getString(R.string.pair_first))
+        if (!adapter.isEnabled) {
+            toast(getString(R.string.enable_bluetooth))
             return
         }
-        if (!force && bonded.size == 1) {
-            // Un solo adaptador emparejado: no vale preguntar.
-            select(bonded.first())
-            return
-        }
+        pickerDialog?.dismiss()
 
-        val names = bonded.map { "${it.name ?: "?"}  ·  ${it.address}" }.toTypedArray()
-        AlertDialog.Builder(this)
+        val shown = mutableListOf<BluetoothDevice>()
+        val names = ArrayAdapter<String>(this, android.R.layout.simple_list_item_1)
+
+        val p = pairing ?: ObdPairing(this, adapter).also { pairing = it }
+        p.start(object : ObdPairing.Listener {
+            override fun onDevices(devices: List<BluetoothDevice>) {
+                shown.clear()
+                shown += devices
+                names.clear()
+                names.addAll(devices.map { d -> label(d) })
+                names.notifyDataSetChanged()
+            }
+
+            override fun onBonded(device: BluetoothDevice) {
+                prefs.edit().putString(KEY_DEVICE, device.address).apply()
+                chosen = device
+                pickerDialog?.dismiss()
+                pickerDialog = null
+                p.stop()
+                toast(getString(R.string.paired_with, device.name ?: device.address))
+                beginPolling(device)
+            }
+
+            override fun onBondFailed(device: BluetoothDevice) {
+                toast(getString(R.string.pair_failed))
+            }
+
+            override fun onScanFinished() {
+                if (shown.isEmpty()) toast(getString(R.string.nothing_found))
+            }
+        })
+
+        pickerDialog = AlertDialog.Builder(this)
             .setTitle(R.string.choose_adapter)
-            .setItems(names) { _, i -> select(bonded[i]) }
-            .setOnCancelListener { if (force) goImmersive() }
-            .show()
+            .setAdapter(names) { _, i -> shown.getOrNull(i)?.let { p.bond(it) } }
+            .setNeutralButton(R.string.scan) { _, _ -> beginScan() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .setOnDismissListener { goImmersive() }
+            .create()
+            .also { it.show() }
+
+        // Arrancar el barrido de una: si el adaptador no esta emparejado,
+        // la lista sale vacia y esperar a que toquen "Buscar" es un paso de mas.
+        beginScan()
     }
 
     @SuppressLint("MissingPermission")
-    private fun select(device: BluetoothDevice) {
-        prefs.edit().putString(KEY_DEVICE, device.address).apply()
-        beginPolling(device)
+    private fun label(d: BluetoothDevice): String {
+        val name = runCatching { d.name }.getOrNull() ?: "(sin nombre)"
+        val bonded = d.bondState == BluetoothDevice.BOND_BONDED
+        val mark = if (ObdPairing.looksLikeObd(d)) "★ " else ""
+        val estado = if (bonded) getString(R.string.bonded) else getString(R.string.tap_to_pair)
+        return "$mark$name\n${d.address}  ·  $estado"
     }
+
+    private fun beginScan() {
+        // En API 30 y menores el barrido de Bluetooth exige ubicacion fina;
+        // sin ella startDiscovery no devuelve nada y parece que no hay nadie.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            val granted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                requestScanPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                return
+            }
+        }
+        pairing?.scan()
+    }
+
+    // --- Sondeo -------------------------------------------------------------
 
     private fun beginPolling(device: BluetoothDevice) {
         scheduler?.stop()
@@ -172,8 +271,6 @@ class DashActivity : ComponentActivity() {
      * al cambiar de adaptador la vista se quedaria escuchando al scheduler
      * viejo, ya detenido, y el tablero se congelaria sin decir por que.
      */
-    private var observeJob: kotlinx.coroutines.Job? = null
-
     private fun observe(target: PollScheduler) {
         observeJob?.cancel()
         observeJob = lifecycleScope.launch {
@@ -181,11 +278,6 @@ class DashActivity : ComponentActivity() {
                 target.state.collect { dashView.setState(it) }
             }
         }
-    }
-
-    override fun onDestroy() {
-        scheduler?.stop()
-        super.onDestroy()
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()

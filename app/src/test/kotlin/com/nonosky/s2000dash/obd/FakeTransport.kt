@@ -16,6 +16,10 @@ class FakeTransport(
 ) : ObdTransport {
 
     val written = mutableListOf<String>()
+
+    /** Cuantas veces se drena, y antes de que comando. */
+    val drains = mutableListOf<Int>()
+
     var connected = false
         private set
     var closed = false
@@ -43,6 +47,11 @@ class FakeTransport(
         val out = pending
         pending = ""
         return out
+    }
+
+    override fun drain() {
+        drains += written.size
+        pending = ""
     }
 
     override fun close() {

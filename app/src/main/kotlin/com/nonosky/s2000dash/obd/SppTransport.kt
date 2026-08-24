@@ -46,13 +46,19 @@ class SppTransport(
             // por reflexion. Es un truco conocido y vale intentarlo antes de
             // rendirse: sin el, varios adaptadores baratos nunca conectan.
             runCatching { s.close() }
-            val fallback = try {
+            var alt: BluetoothSocket? = null
+            try {
                 val m = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-                (m.invoke(device, 1) as BluetoothSocket).also { it.connect() }
+                alt = m.invoke(device, 1) as BluetoothSocket
+                alt.connect()
             } catch (second: Exception) {
+                // Cerrar el socket alterno si se creo pero no conecto: sin
+                // esto se fuga un canal RFCOMM en cada reintento, y el
+                // scheduler reintenta con backoff para siempre.
+                runCatching { alt?.close() }
                 throw IOException("Fallo RFCOMM (normal y canal 1): ${first.message}", second)
             }
-            attach(fallback)
+            attach(alt)
             return
         }
         attach(s)
@@ -85,7 +91,17 @@ class SppTransport(
                 continue
             }
             val n = ins.read(buf, 0, minOf(available, buf.size))
-            if (n <= 0) continue
+            if (n < 0) {
+                // Fin de stream: el adaptador cerro. Sin esto el bucle
+                // giraria sin pausa hasta el timeout y, peor, el scheduler
+                // seguiria creyendo que el enlace vive.
+                throw IOException("El adaptador cerro la conexion")
+            }
+            if (n == 0) {
+                // available() mintio; no girar en vacio.
+                Thread.sleep(2)
+                continue
+            }
             for (i in 0 until n) {
                 val c = buf[i].toInt().toChar()
                 if (c == PROMPT) return sb.toString()
@@ -94,6 +110,19 @@ class SppTransport(
         }
         // Timeout: devolvemos lo que haya. Truncado es asunto del parser.
         return sb.toString()
+    }
+
+    override fun drain() {
+        val ins = input ?: return
+        val buf = ByteArray(256)
+        runCatching {
+            // Tope de vueltas: si el adaptador esta escupiendo sin parar, no
+            // nos quedamos aqui atrapados en lugar de sondear.
+            var guard = 0
+            while (ins.available() > 0 && guard++ < 64) {
+                if (ins.read(buf, 0, minOf(ins.available(), buf.size)) <= 0) break
+            }
+        }
     }
 
     override fun close() {

@@ -69,6 +69,10 @@ class Elm327Session(private val transport: ObdTransport) {
         PidDecoder.decodeVoltage(runCatching { send("ATRV") }.getOrNull())
 
     private fun send(command: String, timeoutMs: Long = QUERY_TIMEOUT_MS): String {
+        // Tirar la cola de la respuesta anterior antes de preguntar de nuevo.
+        // Sin esto, un solo timeout desincroniza comando y respuesta para
+        // siempre: cada PID se quedaria leyendo lo que contesto el anterior.
+        transport.drain()
         transport.write((command + "\r").toByteArray(Charsets.US_ASCII))
         return transport.readUntilPrompt(timeoutMs)
     }

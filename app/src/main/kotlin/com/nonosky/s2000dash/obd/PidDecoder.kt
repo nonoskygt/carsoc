@@ -18,49 +18,60 @@ object PidDecoder {
     const val PID_IAT = "010F"
 
     /**
-     * Tokens de error del adaptador. Si alguno aparece, no hay muestra.
-     * Se comparan sin espacios para que "NO DATA" y "NODATA" caigan igual.
+     * Tokens que en `ATRV` significan que no hubo lectura.
+     *
+     * Ojo: NO se usan para las tramas de PID. Ver [payloadOf] — ahi buscar
+     * tokens de error sobre la respuesta entera era justamente el error.
      */
     private val ERROR_TOKENS = listOf(
-        "NODATA", "SEARCHING", "BUSINIT", "BUSERROR", "BUSBUSY",
-        "STOPPED", "UNABLETOCONNECT", "CANERROR", "DATAERROR",
-        "ERROR", "?"
+        "NODATA", "STOPPED", "UNABLETOCONNECT", "BUSERROR",
+        "CANERROR", "DATAERROR", "ERROR", "?"
     )
 
     /**
      * Extrae los bytes de datos de una respuesta a [pid].
      *
-     * Absorbe prompt `>`, saltos de linea, espacios (por si `ATS0` no tomo
-     * efecto) y el eco del comando (por si `ATE0` no tomo efecto). Devuelve
-     * solo la carga util que sigue al encabezado de respuesta.
+     * Se parsea **linea por linea**, y una linea que no sea una trama valida
+     * simplemente se ignora. Esto importa mas de lo que parece: un ELM327
+     * antepone banners de progreso a la trama buena, dentro de la MISMA
+     * respuesta —
+     *
+     *     BUS INIT: ...OK\r41 0C 1A F8\r\r>
+     *     SEARCHING...\r41 0C 1A F8\r\r>
+     *
+     * — y en ISO 9141-2 la primera peticion de cada conexion SIEMPRE trae
+     * el `BUS INIT`. Rechazar la respuesta entera por contener ese texto
+     * tiraba la lectura con la que se comprueba que el bus responde, asi que
+     * el enlace bueno se declaraba muerto y no se leia un solo dato.
+     *
+     * No hace falta buscar tokens de error: si no hay trama, no hay muestra.
+     * `BUS INIT: ERROR` y `UNABLE TO CONNECT` caen solos por no traer trama.
+     *
+     * Absorbe ademas el prompt `>`, los espacios (por si `ATS0` no tomo
+     * efecto) y el eco del comando (por si `ATE0` no tomo efecto): el eco
+     * lleva el modo de peticion `01`, no el de respuesta `41`.
      */
     fun payloadOf(raw: String?, pid: String): ByteArray? {
         if (raw.isNullOrBlank()) return null
-
-        val upper = raw.uppercase()
-        // Compactar para buscar tokens de error sin importar el espaciado.
-        val compact = upper.filter { !it.isWhitespace() && it != '>' }
-        if (compact.isEmpty()) return null
-        if (ERROR_TOKENS.any { compact.contains(it) }) return null
-
         val prefix = responsePrefix(pid) ?: return null
 
-        // Quedarse solo con digitos hex. Cualquier residuo no-hex era ruido.
-        val hex = compact.filter { it.isDigit() || it in 'A'..'F' }
+        for (line in raw.split('\r', '\n')) {
+            val hex = line.uppercase().filter { it.isDigit() || it in 'A'..'F' }
+            if (hex.isEmpty()) continue
 
-        // La primera ocurrencia del encabezado es la respuesta real: si hay
-        // eco, el eco lleva el modo de peticion (01) y no el de respuesta (41).
-        val at = hex.indexOf(prefix)
-        if (at < 0) return null
+            val at = hex.indexOf(prefix)
+            if (at < 0) continue
 
-        var body = hex.substring(at + prefix.length)
-        // Longitud impar = respuesta truncada a la mitad de un byte.
-        if (body.length % 2 != 0) body = body.dropLast(1)
-        if (body.isEmpty()) return null
+            var body = hex.substring(at + prefix.length)
+            // Longitud impar = respuesta truncada a la mitad de un byte.
+            if (body.length % 2 != 0) body = body.dropLast(1)
+            if (body.isEmpty()) continue
 
-        return ByteArray(body.length / 2) { i ->
-            body.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+            return ByteArray(body.length / 2) { i ->
+                body.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+            }
         }
+        return null
     }
 
     /** `010C` -> `410C`. El modo de respuesta es el de peticion mas 0x40. */

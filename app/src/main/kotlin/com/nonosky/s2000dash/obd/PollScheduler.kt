@@ -4,12 +4,14 @@ import android.util.Log
 import com.nonosky.s2000dash.ConnectionState
 import com.nonosky.s2000dash.VehicleState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext
@@ -37,19 +39,36 @@ class PollScheduler(
 
     private var job: Job? = null
 
+    /**
+     * El transporte de la conexion en curso.
+     *
+     * Se guarda para poder cerrarlo desde [stop]: un `read` bloqueado sobre
+     * un `BluetoothSocket` NO se interrumpe con cancelar la corrutina — la
+     * cancelacion de Kotlin es cooperativa y el hilo esta dentro de una
+     * llamada nativa. Cerrar el socket es lo unico que lo desatora.
+     */
+    @Volatile
+    private var currentTransport: ObdTransport? = null
+
     /** PIDs que contestaron mal 3 veces seguidas: fuera de la rotacion. */
     private val failures = mutableMapOf<String, Int>()
     private val disabled = mutableSetOf<String>()
 
     fun start() {
         if (job?.isActive == true) return
-        job = scope.launch { runForever() }
+        // Dispatchers.IO y no el del scope: el scope que nos pasan suele ser
+        // lifecycleScope, que corre en el hilo principal. Todo aqui abajo es
+        // I/O bloqueante (BluetoothSocket, sleeps del transporte), asi que en
+        // Main congelaria la UI y daria ANR en cuanto conectara.
+        job = scope.launch(Dispatchers.IO) { runForever() }
     }
 
     fun stop() {
         job?.cancel()
         job = null
-        _state.value = _state.value.copy(connection = ConnectionState.Disconnected)
+        runCatching { currentTransport?.close() }
+        currentTransport = null
+        _state.update { it.copy(connection = ConnectionState.Disconnected) }
     }
 
     private suspend fun runForever() {
@@ -57,18 +76,21 @@ class PollScheduler(
         while (coroutineContext.isActive) {
             var transport: ObdTransport? = null
             try {
-                _state.value = _state.value.copy(connection = ConnectionState.Connecting)
+                _state.update { it.copy(connection = ConnectionState.Connecting) }
                 transport = transportFactory()
+                currentTransport = transport
                 transport.connect()
 
-                _state.value = _state.value.copy(connection = ConnectionState.Initializing)
+                _state.update { it.copy(connection = ConnectionState.Initializing) }
                 val session = Elm327Session(transport)
                 val info = session.initialize()
 
-                _state.value = _state.value.copy(
-                    connection = ConnectionState.Polling,
-                    protocol = info.describedAs,
-                )
+                _state.update {
+                    it.copy(
+                        connection = ConnectionState.Polling,
+                        protocol = info.describedAs,
+                    )
+                }
                 attempt = 0            // enlace sano: el backoff vuelve a cero
                 failures.clear()
                 disabled.clear()
@@ -79,12 +101,13 @@ class PollScheduler(
                 Log.w(TAG, "Ciclo de conexion caido: ${e.message}")
             } finally {
                 runCatching { transport?.close() }
+                if (currentTransport === transport) currentTransport = null
             }
 
             coroutineContext.ensureActive()
             // Se conservan los ultimos valores; solo cambia el estado, y la
             // vista los pintara en gris cuando pasen de rancios.
-            _state.value = _state.value.copy(connection = ConnectionState.Disconnected)
+            _state.update { it.copy(connection = ConnectionState.Disconnected) }
 
             val wait = backoffMs(attempt++)
             Log.i(TAG, "Reintento en ${wait} ms")
@@ -127,31 +150,36 @@ class PollScheduler(
     private fun readAndApply(session: Elm327Session, pid: String): Boolean {
         if (pid == PID_VOLTAGE) {
             val v = session.readVoltage()
-            if (v != null) _state.value = _state.value.copy(batteryV = v, batteryAtMs = clock())
+            if (v != null) _state.update { it.copy(batteryV = v, batteryAtMs = clock()) }
             return v != null
         }
 
         val raw = session.queryRaw(pid)
         val now = clock()
+        // `update` y no `value = value.copy(...)`: lo segundo es un
+        // leer-modificar-escribir que puede perder una muestra si algo mas
+        // toca el estado entre medias.
         val applied = when (pid) {
             PidDecoder.PID_RPM -> PidDecoder.decodeRpm(raw)?.also { rpm ->
-                _state.value = _state.value.copy(
-                    rpm = rpm,
-                    rpmAtMs = now,
-                    sessionMaxRpm = maxOf(_state.value.sessionMaxRpm, rpm),
-                )
+                _state.update {
+                    it.copy(
+                        rpm = rpm,
+                        rpmAtMs = now,
+                        sessionMaxRpm = maxOf(it.sessionMaxRpm, rpm),
+                    )
+                }
             }
-            PidDecoder.PID_SPEED -> PidDecoder.decodeSpeed(raw)?.also {
-                _state.value = _state.value.copy(speedKmh = it, speedAtMs = now)
+            PidDecoder.PID_SPEED -> PidDecoder.decodeSpeed(raw)?.also { v ->
+                _state.update { it.copy(speedKmh = v, speedAtMs = now) }
             }
-            PidDecoder.PID_LOAD -> PidDecoder.decodeLoad(raw)?.also {
-                _state.value = _state.value.copy(loadPct = it, loadAtMs = now)
+            PidDecoder.PID_LOAD -> PidDecoder.decodeLoad(raw)?.also { v ->
+                _state.update { it.copy(loadPct = v, loadAtMs = now) }
             }
-            PidDecoder.PID_COOLANT -> PidDecoder.decodeCoolant(raw)?.also {
-                _state.value = _state.value.copy(coolantC = it, coolantAtMs = now)
+            PidDecoder.PID_COOLANT -> PidDecoder.decodeCoolant(raw)?.also { v ->
+                _state.update { it.copy(coolantC = v, coolantAtMs = now) }
             }
-            PidDecoder.PID_IAT -> PidDecoder.decodeIat(raw)?.also {
-                _state.value = _state.value.copy(iatC = it, iatAtMs = now)
+            PidDecoder.PID_IAT -> PidDecoder.decodeIat(raw)?.also { v ->
+                _state.update { it.copy(iatC = v, iatAtMs = now) }
             }
             else -> null
         }

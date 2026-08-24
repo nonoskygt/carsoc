@@ -24,5 +24,17 @@ interface ObdTransport : Closeable {
      */
     fun readUntilPrompt(timeoutMs: Long): String
 
+    /**
+     * Descarta lo que quede sin leer en el buffer de entrada.
+     *
+     * Hace falta antes de cada comando: si una respuesta se corto por
+     * timeout, su cola —incluido su prompt `>`— sigue en el socket, y la
+     * siguiente lectura terminaria con ESE prompt viejo antes de que llegue
+     * un byte de la respuesta nueva. El desfase de un turno no se corrige
+     * solo: una vez desincronizado, cada PID recibe la respuesta del
+     * anterior indefinidamente.
+     */
+    fun drain()
+
     val isConnected: Boolean
 }
