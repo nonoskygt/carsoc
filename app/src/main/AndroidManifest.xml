@@ -107,6 +107,23 @@
             </intent-filter>
         </receiver>
 
+        <!--
+          Contesta el PIN del emparejamiento Bluetooth.
+
+          Declarado y con prioridad ALTA a proposito. El receptor que ya
+          existia se registraba en tiempo de ejecucion desde la pantalla, asi
+          que con el tablero en segundo plano no existia — y sin prioridad, la
+          UI del sistema atendia antes la difusion ordenada y sacaba su propio
+          dialogo. De ahi el "PIN incorrecto" en bucle que veia el dueño.
+        -->
+        <receiver
+            android:name=".EmparejadorReceiver"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.bluetooth.device.action.PAIRING_REQUEST" />
+            </intent-filter>
+        </receiver>
+
         <!-- Lo que el confirmador ve en pantalla; sin esto no hay forma de
              depurarlo, porque no tiene pantalla ni logs accesibles. -->
         <receiver

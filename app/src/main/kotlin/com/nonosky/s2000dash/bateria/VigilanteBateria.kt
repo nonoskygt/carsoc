@@ -142,25 +142,62 @@ class VigilanteBateria(private val context: Context) {
         }
         val hci = piezas.hci
         try {
-            hci.mandarComando(
+            // Los comandos tambien van por la bomba: es la unica dueña del
+            // aparato, y mandar por fuera de ella deja su respuesta en manos
+            // de quien lea primero.
+            //
+            // Y el barrido va con ciclo de trabajo BAJO, no al 100%. Antes
+            // intervalo y ventana eran iguales (0x0010 los dos), o sea
+            // receptor encendido todo el tiempo — el modo de mayor consumo de
+            // radio que existe. Con ventana 0x0010 sobre intervalo 0x00A0 se
+            // escucha el 10% del tiempo, se encuentra igual un BMS que se
+            // anuncia varias veces por segundo, y se le pide al puerto USB una
+            // fraccion de la corriente.
+            piezas.bomba.comando(
                 HciUsb.CMD_LE_SET_SCAN_PARAMS,
-                byteArrayOf(0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00),
+                byteArrayOf(0x00, 0x10, 0x00, 0xA0.toByte(), 0x00, 0x00, 0x00),
             )
-            hci.mandarComando(HciUsb.CMD_LE_SET_SCAN_ENABLE, byteArrayOf(0x01, 0x00))
+            piezas.bomba.comando(HciUsb.CMD_LE_SET_SCAN_ENABLE, byteArrayOf(0x01, 0x00))
 
             if (!estado.detectada()) {
                 publicar(estado.copy(enlace = EnlaceBateria.Buscando, detalle = null))
             }
 
+            // Los anuncios se reciben SUSCRIBIENDOSE a la bomba, no leyendo el
+            // endpoint por nuestra cuenta.
+            //
+            // Antes este bucle llamaba a `hci.leerEvento(400)` mientras
+            // `bomba-hci` leia el MISMO endpoint: dos hilos dentro de un
+            // bulkTransfer sobre el mismo descriptor del kernel. Eso no es un
+            // bug de aplicacion, es acceso concurrente a un recurso nativo — y
+            // pasaba durante el barrido, que es exactamente cuando el dueño
+            // veia reiniciarse el radio "al intentar conectar por Bluetooth".
+            //
+            // El propio proyecto ya documentaba dos veces que dos lectores del
+            // mismo endpoint se roban los paquetes. Volvio a entrar por esta
+            // puerta al migrar el vigilante a la radio compartida.
             val oidas = linkedMapOf<String, Hallazgo>()
-            val hasta = System.currentTimeMillis() + BARRIDO_MS
-            while (vivo && System.currentTimeMillis() < hasta) {
-                val e = hci.leerEvento(400) ?: continue
-                val h = interpretarAnuncio(e) ?: continue
-                oidas[h.mac] = h
+            val quitar = piezas.bomba.suscribirEventos { e ->
+                runCatching {
+                    val h = interpretarAnuncio(e) ?: return@runCatching
+                    synchronized(oidas) { oidas[h.mac] = h }
+                }
+            }
+            try {
+                val hasta = System.currentTimeMillis() + BARRIDO_MS
+                while (vivo && System.currentTimeMillis() < hasta) {
+                    try {
+                        Thread.sleep(200)
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+            } finally {
+                runCatching { quitar() }
             }
 
-            hci.mandarComando(HciUsb.CMD_LE_SET_SCAN_ENABLE, byteArrayOf(0x00, 0x00))
+            piezas.bomba.comando(HciUsb.CMD_LE_SET_SCAN_ENABLE, byteArrayOf(0x00, 0x00))
 
             val elegida = elegir(oidas.values.toList())
             if (elegida != null) {

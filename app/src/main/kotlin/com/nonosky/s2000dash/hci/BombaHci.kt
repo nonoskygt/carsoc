@@ -264,6 +264,25 @@ class BombaHci(private val hci: CanalUsbHci) {
         entrega.arrancar()
     }
 
+    /**
+     * Suscribe una funcion a los eventos y devuelve como darse de baja.
+     *
+     * Existe para que nadie tenga motivo de leer el endpoint por su cuenta.
+     * Quien solo quiere escuchar eventos —el barrido de la bateria, por
+     * ejemplo— llama a esto en vez de hacer su propio bucle de leerEvento(),
+     * que ponia un segundo hilo dentro de un bulkTransfer sobre el mismo
+     * descriptor que la bomba.
+     */
+    fun suscribirEventos(alLlegar: (ByteArray) -> Unit): () -> Unit {
+        val o = object : Oyente {
+            override fun alEvento(evento: ByteArray) {
+                runCatching { alLlegar(evento) }
+            }
+        }
+        suscribir(o)
+        return { runCatching { quitar(o) } }
+    }
+
     fun quitar(o: Oyente) {
         oyentes.remove(o)
         entregas.remove(o)?.detener()
@@ -297,8 +316,21 @@ class BombaHci(private val hci: CanalUsbHci) {
             }
         }
 
+        /**
+         * Encola para este oyente. Si su cola esta llena, se descarta.
+         *
+         * El descarte se cuenta DOS veces a proposito: en el contador propio
+         * del oyente —para saber cual se atasca— y en el global
+         * [repartosPerdidos], para que siga siendo cierto que "un evento que no
+         * llego a alguien queda contado". Al repartir por oyente, el descarte
+         * dejo de ocurrir en la cola de reparto; si no se sumara aqui, los
+         * descartes se volverian invisibles, que es peor que perderlos.
+         */
         fun ofrecer(r: Recibido) {
-            if (!cola.offer(r)) descartados++
+            if (!cola.offer(r)) {
+                descartados++
+                repartosPerdidos++
+            }
         }
 
         fun detener() {

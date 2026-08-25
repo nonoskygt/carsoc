@@ -155,6 +155,25 @@ object EstadoActual {
     @Volatile
     var encenderFuente: ((String, Boolean) -> String)? = null
 
+    /**
+     * A quien se le esta intentando emparejar ahora mismo.
+     *
+     * El contestador de PIN solo toca ESTE aparato. Contestar el PIN de
+     * cualquiera que pida vincularse seria abrirle la puerta a quien pase por
+     * la calle con un telefono.
+     */
+    @Volatile
+    var macAEmparejar: String? = null
+
+    /**
+     * PIN con el que se contesta. Los clones de ELM327 usan casi siempre 1234.
+     *
+     * Se puede cambiar por HTTP para probar los otros sin desplegar: el
+     * emparejamiento no dice cual es el bueno, solo si acerto.
+     */
+    @Volatile
+    var pinDeEmparejamiento: String = "1234"
+
     /** El lector del motor, para exponer su traza por HTTP. */
     @Volatile
     var lectorObd: com.nonosky.s2000dash.obd.LectorObdHci? = null

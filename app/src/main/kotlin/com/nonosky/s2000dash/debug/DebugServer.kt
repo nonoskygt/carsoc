@@ -324,6 +324,17 @@ class DebugServer(
                     sendText(out, 200, "application/json",
                         """{"resultado":${org.json.JSONObject.quote(r)}}""")
                 }
+                "/pin" -> {
+                    // Fija a quien emparejar y con que PIN. El emparejamiento
+                    // no dice cual es el bueno, solo si acerto: por eso se
+                    // pueden probar los candidatos sin desplegar nada.
+                    consulta["mac"]?.let { EstadoActual.macAEmparejar = it }
+                    consulta["pin"]?.let { EstadoActual.pinDeEmparejamiento = it }
+                    sendText(out, 200, "application/json", JSONObject().apply {
+                        put("mac", EstadoActual.macAEmparejar ?: JSONObject.NULL)
+                        put("pin", EstadoActual.pinDeEmparejamiento)
+                    }.toString(2))
+                }
                 "/termica" -> sendText(out, 200, "text/plain",
                     com.nonosky.s2000dash.Termometro.diagnostico().joinToString(SALTO))
                 "/tpms" -> sendText(out, 200, "text/plain", tpmsTexto())
@@ -663,6 +674,7 @@ class DebugServer(
               /apps?filtro=    lista lo instalado
               /at?cmd=0100,0120  manda comandos crudos al ELM327
               /tpms            presiones y temperaturas de las cuatro llantas
+              /pin?mac=&pin=   a quien emparejar y con que PIN
               /bateria         estado del BMS de litio por BLE
               /bateria-gatt?mac=  conecta por GATT y lee el BMS, con traza
               /obd-hci?mac=    OBD por RFCOMM sobre HCI crudo, con traza
