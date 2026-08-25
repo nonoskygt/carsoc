@@ -28,6 +28,11 @@ class BootReceiver : BroadcastReceiver() {
         // desde segundo plano, el puente y las actualizaciones quedan vivos.
         DashService.arrancar(context)
 
+        // La alarma periodica SOLO revive el servicio. Abrir la pantalla cada
+        // diez minutos le quitaria el radio al conductor a media curva, que
+        // seria mucho peor que el problema que resuelve.
+        if (accion == DashService.ACCION_RESUCITAR) return
+
         val abrir = Intent(context, DashActivity::class.java).apply {
             // Desde un receiver no hay actividad de origen.
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

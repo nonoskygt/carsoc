@@ -254,7 +254,19 @@ class DebugServer(
                     sendText(out, 200, "text/plain", lista.joinToString(SALTO))
                 }
                 "/dongle" -> sendText(out, 200, "text/plain",
-                    com.nonosky.s2000dash.hci.DuenoDongle.diagnostico().joinToString(SALTO))
+                    (com.nonosky.s2000dash.hci.RadioBt.diagnostico() +
+                        com.nonosky.s2000dash.hci.RadioBt.traza).joinToString(SALTO))
+                "/at" -> {
+                    // Comandos separados por coma, sobre el enlace ya vivo.
+                    val cmds = (consulta["cmd"] ?: "").split(",")
+                        .map { it.trim().uppercase() }
+                        .filter { it.isNotEmpty() }
+                        .take(12)
+                    val lista = if (cmds.isEmpty()) listOf("falta cmd=")
+                    else runCatching { EstadoActual.comandoObd?.invoke(cmds) }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro el canal AT")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
                 "/tpms" -> sendText(out, 200, "text/plain", tpmsTexto())
                 "/bateria" -> {
                     val v = EstadoActual.vigilanteBateria
@@ -571,6 +583,7 @@ class DebugServer(
               /accion?a=atras|inicio|recientes|notificaciones
               /abrir?paquete=  abre una app
               /apps?filtro=    lista lo instalado
+              /at?cmd=0100,0120  manda comandos crudos al ELM327
               /tpms            presiones y temperaturas de las cuatro llantas
               /bateria         estado del BMS de litio por BLE
               /bateria-gatt?mac=  conecta por GATT y lee el BMS, con traza

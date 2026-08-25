@@ -82,14 +82,36 @@ class DashView @JvmOverloads constructor(
     // --- Bucle de animacion -------------------------------------------------
 
     /**
-     * Se sigue repintando en bucle aunque ya no haya aguja que animar: el
-     * parpadeo de una presion en alarma y el paso de un dato a "rancio"
-     * ocurren con el tiempo, no con la llegada de datos. Sin bucle, una
-     * llanta se quedaria pintada como fresca para siempre.
+     * Repinta unas pocas veces por segundo, NO a 60 fps.
+     *
+     * Los 60 fps tenian sentido cuando habia una aguja de tacometro que
+     * animar. Al quitar el tacometro me quede con el bucle, y eso dejo a un
+     * rk3326 barato redibujando sesenta veces por segundo, para siempre,
+     * encima de los hilos de OBD, bateria, TPMS, servidor HTTP y USB. El
+     * dueño reporto que el head unit se apagaba: calor y CPU saturada.
+     *
+     * Ya no hay nada que se mueva rapido. Lo mas veloz que hay que mostrar es
+     * un parpadeo de alarma cada medio segundo, y para eso sobran 5 cuadros
+     * por segundo. Un tablero de vigilancia no es un videojuego.
      */
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        postInvalidateOnAnimation()
+        programarRepintado()
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(repintar)
+        super.onDetachedFromWindow()
+    }
+
+    private val repintar = Runnable {
+        invalidate()
+        programarRepintado()
+    }
+
+    private fun programarRepintado() {
+        removeCallbacks(repintar)
+        postDelayed(repintar, MS_ENTRE_CUADROS)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -118,8 +140,6 @@ class DashView @JvmOverloads constructor(
         trazoPaint.strokeWidth = h * 0.004f
         canvas.drawLine(col, h * 0.06f, col, h * 0.94f, trazoPaint)
         canvas.drawLine(col * 2f, h * 0.06f, col * 2f, h * 0.94f, trazoPaint)
-
-        postInvalidateOnAnimation()
     }
 
     // --- Llantas ------------------------------------------------------------
@@ -417,12 +437,58 @@ class DashView @JvmOverloads constructor(
 
     // --- Columna libre ------------------------------------------------------
 
-    /** Reservada. Vacia a proposito, y dicho para que no parezca un fallo. */
+    /**
+     * Tercera columna: lo que el carro SI da y no estabamos usando.
+     *
+     * Salio de preguntarle a la ECU su mapa de PIDs en vez de suponer. No hay
+     * nivel de combustible —el bit del PID 0x20 esta en cero, o sea que nada
+     * por encima del 0x20 existe en este carro— pero si hay presion de
+     * colector, acelerador y avance, que en un atmosferico exprimido dicen
+     * bastante mas que un flotador de gasolina.
+     */
     private fun dibujarLibre(canvas: Canvas, left: Float, ancho: Float, h: Float) {
+        val ahora = System.currentTimeMillis()
+        val margen = ancho * 0.08f
+        val x0 = left + margen
+        val x1 = left + ancho - margen
+
         labelPaint.textAlign = Paint.Align.CENTER
-        labelPaint.color = COLOR_SILUETA_TEXTO
-        labelPaint.textSize = h * 0.048f
-        canvas.drawText("LIBRE", left + ancho * 0.5f, h * 0.50f, labelPaint)
+        labelPaint.color = COLOR_TEXT_DIM
+        labelPaint.textSize = h * 0.055f
+        canvas.drawText("ADMISION", left + ancho * 0.5f, h * 0.10f, labelPaint)
+
+        // MAP con barra: en un atmosferico es un vacuometro, y lo que se mira
+        // ahi es la TENDENCIA —cuanto esta pidiendo el motor— no la cifra.
+        val map = state.mapKpa
+        val mapStale = state.isStale(state.mapAtMs, ahora)
+        filaGrande(canvas, x0, x1, h * 0.30f, h, "COLECTOR",
+            map?.let { "$it kPa" } ?: "-- kPa",
+            if (mapStale) COLOR_STALE else COLOR_TEXT)
+
+        val barTop = h * 0.345f
+        val barH = h * 0.045f
+        barPaint.color = COLOR_CAJA
+        canvas.drawRoundRect(x0, barTop, x1, barTop + barH, barH / 2, barH / 2, barPaint)
+        if (map != null) {
+            // De 20 a 105 kPa: por debajo es vacio de retencion y por encima
+            // ya no sube un atmosferico. Mas rango solo aplastaria la escala.
+            val t = ((map - 20f) / 85f).coerceIn(0f, 1f)
+            barPaint.color = if (mapStale) COLOR_STALE else COLOR_GREEN
+            canvas.drawRoundRect(x0, barTop, x0 + (x1 - x0) * t, barTop + barH, barH / 2, barH / 2, barPaint)
+        }
+
+        val ace = state.aceleradorPct
+        filaGrande(canvas, x0, x1, h * 0.55f, h, "ACELERADOR",
+            ace?.let { "$it %" } ?: "-- %",
+            if (state.isStale(state.aceleradorAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
+
+        filaGrande(canvas, x0, x1, h * 0.76f, h, "AVANCE",
+            state.avanceGrados?.let { "$it °" } ?: "-- °",
+            if (state.isStale(state.avanceAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
+
+        filaGrande(canvas, x0, x1, h * 0.95f, h, "VELOCIDAD",
+            state.speedKmh?.let { "$it" } ?: "--",
+            if (state.isStale(state.speedAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
     }
 
     // --- Motor --------------------------------------------------------------
@@ -445,41 +511,105 @@ class DashView @JvmOverloads constructor(
         labelPaint.textSize = h * 0.055f
         canvas.drawText(tituloMotor(), left + ancho * 0.5f, h * 0.10f, labelPaint)
 
+        // El agua va SIN barra y con el numero coloreado, por peticion del
+        // dueño. Una barra obliga a estimar la posicion y ademas ocupa sitio;
+        // un numero de color da el valor exacto y el estado a la vez, que es
+        // justo lo que se necesita de reojo.
         val c = state.coolantC
         val aguaStale = state.isStale(state.coolantAtMs, ahora)
-        fila(canvas, x0, x1, h * 0.26f, h, "AGUA", c?.let { "$it °C" } ?: "-- °C", aguaStale,
-            colorAgua(c, aguaStale))
+        filaGrande(canvas, x0, x1, h * 0.30f, h, "AGUA",
+            c?.let { "$it °C" } ?: "-- °C", colorAgua(c, aguaStale))
 
-        // El agua lleva barra ademas del numero: es el unico dato del motor
-        // donde importa la tendencia y no solo el valor.
-        val barTop = h * 0.305f
-        val barH = h * 0.045f
-        barPaint.color = COLOR_CAJA
-        canvas.drawRoundRect(x0, barTop, x1, barTop + barH, barH / 2, barH / 2, barPaint)
-        if (c != null) {
-            val t = ((c - 40f) / 80f).coerceIn(0f, 1f)
-            barPaint.color = colorAgua(c, aguaStale)
-            canvas.drawRoundRect(x0, barTop, x0 + (x1 - x0) * t, barTop + barH, barH / 2, barH / 2, barPaint)
-        }
-
-        fila(canvas, x0, x1, h * 0.50f, h, "AIRE",
+        filaGrande(canvas, x0, x1, h * 0.52f, h, "AIRE",
             state.iatC?.let { "$it °C" } ?: "-- °C",
-            state.isStale(state.iatAtMs, ahora), COLOR_TEXT)
-        fila(canvas, x0, x1, h * 0.65f, h, "CARGA",
-            state.loadPct?.let { "$it %" } ?: "-- %",
-            state.isStale(state.loadAtMs, ahora), COLOR_TEXT)
-        // Este voltaje es el que da el propio adaptador OBD con ATRV: es el
-        // del sistema electrico, medido en el puerto. No es el BMS — ese va en
-        // su columna. Se llama SISTEMA para que nadie confunda los dos.
-        fila(canvas, x0, x1, h * 0.80f, h, "SISTEMA",
+            if (state.isStale(state.iatAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
+
+        // MEZCLA desde la sonda que el carro SI expone.
+        //
+        // Se pedia el AFR de banda ancha (PID 0134) y siempre salia vacio: el
+        // mapa de PIDs de esta ECU dice que no soporta nada por encima del
+        // 0x20. Lo que si hay es el voltaje de la sonda (0114), que es de
+        // banda estrecha y **no da un AFR**: solo de que lado de la
+        // estequiometrica esta. Se muestra como RICA/POBRE, que es lo que esa
+        // señal puede decir de verdad — poner un numero seria inventarlo.
+        val o2 = state.o2Voltaje
+        filaGrande(canvas, x0, x1, h * 0.74f, h, "MEZCLA",
+            textoMezcla(o2), colorO2(o2, state.isStale(state.o2AtMs, ahora)))
+
+        // El voltaje del puerto OBD es el del sistema con el motor en marcha,
+        // o sea lo que da el ALTERNADOR. Se llama por su nombre para que no se
+        // confunda con la bateria de litio, que tiene su propia columna.
+        filaGrande(canvas, x0, x1, h * 0.93f, h, "ALTERNADOR",
             state.batteryV?.let { String.format("%.1f V", it) } ?: "-- V",
-            state.isStale(state.batteryAtMs, ahora), COLOR_TEXT)
+            colorAlternador(state.batteryV, state.isStale(state.batteryAtMs, ahora)))
     }
 
+    /**
+     * Rica, pobre, o en lazo cerrado.
+     *
+     * Una sonda de banda estrecha oscila alrededor de 0.45 V cuando la ECU
+     * esta corrigiendo bien; los extremos son los topes del sensor. Asi que
+     * lo unico honesto que se puede decir es de que lado esta, y si esta
+     * oscilando, que es lo que se quiere ver.
+     */
+    private fun textoMezcla(v: Float?): String = when {
+        v == null -> "--"
+        v >= 0.60f -> "RICA"
+        v <= 0.30f -> "POBRE"
+        else -> "OK"
+    }
+
+    private fun colorO2(v: Float?, stale: Boolean): Int = when {
+        v == null || stale -> COLOR_STALE
+        v <= 0.20f -> if (parpadeo()) COLOR_REDLINE else COLOR_AMBER
+        v >= 0.70f -> COLOR_AMBER
+        else -> COLOR_GREEN
+    }
+
+    /**
+     * Color del voltaje del alternador.
+     *
+     * Por debajo de 13 V con el motor en marcha, no esta cargando. Por encima
+     * de 15 V el regulador se paso, y eso mata baterias — sobre todo de litio.
+     */
+    private fun colorAlternador(v: Float?, stale: Boolean): Int = when {
+        v == null || stale -> COLOR_STALE
+        v >= 15.0f -> if (parpadeo()) COLOR_REDLINE else COLOR_AMBER
+        v >= 13.2f -> COLOR_GREEN
+        v >= 12.4f -> COLOR_AMBER
+        else -> COLOR_REDLINE
+    }
+
+    /** Etiqueta a la izquierda, valor grande y de color a la derecha. */
+    private fun filaGrande(
+        canvas: Canvas, x0: Float, x1: Float, y: Float, h: Float,
+        etiqueta: String, valor: String, color: Int,
+    ) {
+        labelPaint.textAlign = Paint.Align.LEFT
+        labelPaint.color = COLOR_TEXT_DIM
+        labelPaint.textSize = h * 0.075f
+        canvas.drawText(etiqueta, x0, y, labelPaint)
+
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.color = color
+        textPaint.textSize = h * 0.125f
+        canvas.drawText(valor, x1, y + h * 0.012f, textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        labelPaint.textAlign = Paint.Align.CENTER
+    }
+
+    /**
+     * Azul, verde, ambar, rojo — la escala que pidio el dueño.
+     *
+     * Los cortes son los del F20C: el termostato abre sobre 82, la
+     * temperatura de trabajo se asienta entre 85 y 95, a 100 el ventilador ya
+     * deberia estar corriendo, y 105 es problema.
+     */
     private fun colorAgua(c: Int?, stale: Boolean): Int = when {
         c == null || stale -> COLOR_STALE
-        c >= EngineConstants.COOLANT_HIGH_C -> COLOR_REDLINE
-        c >= EngineConstants.COOLANT_NORMAL_C -> COLOR_GREEN
+        c >= EngineConstants.COOLANT_HIGH_C -> if (parpadeo()) COLOR_REDLINE else COLOR_AMBER
+        c >= EngineConstants.COOLANT_AVISO_C -> COLOR_AMBER
+        c >= EngineConstants.COOLANT_TIBIO_C -> COLOR_GREEN
         else -> COLOR_COLD
     }
 
@@ -527,5 +657,13 @@ class DashView @JvmOverloads constructor(
         const val COLOR_REDLINE = 0xFFFF3B30.toInt()
         const val COLOR_VTEC_ON = 0xFF00C2FF.toInt()
         const val COLOR_COLD = 0xFF3D8BFF.toInt()
+
+        /**
+         * 200 ms entre cuadros: 5 por segundo.
+         *
+         * Suficiente para que el parpadeo de media segundo se vea limpio, y
+         * doce veces menos trabajo que los 60 fps que tenia antes.
+         */
+        const val MS_ENTRE_CUADROS = 200L
     }
 }

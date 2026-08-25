@@ -43,6 +43,25 @@ object EngineConstants {
     const val COOLANT_HIGH_C = 105
 
     /**
+     * Escala de color del agua, pensada para el F20C.
+     *
+     * El termostato del AP1 abre sobre los 82 grados y la temperatura de
+     * trabajo se asienta entre 85 y 95. Por encima de 100 el ventilador ya
+     * deberia estar corriendo, y 105 es donde empieza el problema de verdad.
+     *
+     * Se pinta el NUMERO y no una barra, por peticion del dueño: una barra
+     * ocupa sitio y obliga a estimar; un numero de color se lee de reojo y da
+     * el valor exacto a la vez.
+     */
+    const val COOLANT_FRIO_C = 70
+
+    /** Debajo de esto el motor aun no ha llegado a temperatura. */
+    const val COOLANT_TIBIO_C = 82
+
+    /** Encima de esto conviene mirar. */
+    const val COOLANT_AVISO_C = 100
+
+    /**
      * El VTEC no engancha a bajo pedal aunque las revoluciones esten arriba,
      * por eso la carga entra en la condicion. Sin lectura de carga se asume
      * que no esta enganchado: preferimos no prender la banda de mas.

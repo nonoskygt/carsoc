@@ -131,6 +131,24 @@ object EstadoActual {
     @Volatile
     var probarObdHci: ((String) -> List<String>)? = null
 
+    /** La pantalla se registra aqui para repintar cuando llega dato del motor. */
+    @Volatile
+    var alCambiarObd: (() -> Unit)? = null
+
+    /**
+     * Manda comandos crudos al ELM327 usando el enlace que ya este vivo.
+     *
+     * Reutiliza la sesion del lector en vez de abrir otra: montar un segundo
+     * enlace contra el mismo adaptador lo tumbaria, y ademas tardaria los diez
+     * segundos del emparejamiento por cada pregunta.
+     */
+    @Volatile
+    var comandoObd: ((List<String>) -> List<String>)? = null
+
+    /** El lector del motor, para exponer su traza por HTTP. */
+    @Volatile
+    var lectorObd: com.nonosky.s2000dash.obd.LectorObdHci? = null
+
     /** La pantalla se registra aqui para repintar cuando cambia la bateria. */
     @Volatile
     var alCambiarBateria: (() -> Unit)? = null

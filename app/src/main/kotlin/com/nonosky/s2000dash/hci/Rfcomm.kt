@@ -39,6 +39,7 @@ object Rfcomm {
 
     // --- Campos de control ---------------------------------------------------
 
+    // Los valores que se MANDAN, con el bit P/F ya puesto donde toca.
     const val SABM = 0x3F
     const val UA = 0x73
     const val DM = 0x0F
@@ -47,6 +48,25 @@ object Rfcomm {
 
     /** Bit de sondeo/final, que va sumado al campo de control. */
     const val PF = 0x10
+
+    /**
+     * Los mismos campos SIN el bit P/F, que es como hay que compararlos.
+     *
+     * Existen porque no tenerlos costo una tarde. Comparar
+     * `(control and 0xEF) == UA` es una condicion **imposible**: la mascara
+     * 0xEF borra justo el bit 0x10 que UA (0x73) lleva puesto, asi que el lado
+     * izquierdo vale 0x63 y nunca puede igualar 0x73.
+     *
+     * El sintoma fue de los peores: el Steren contestaba el UA correctamente
+     * —se vio en el volcado crudo, `03 73 01 D7`— y el codigo lo tiraba. El
+     * mensaje decia "el multiplexor no contesto al SABM", que apunta al otro
+     * extremo cuando el fallo estaba aqui.
+     */
+    private const val SABM_BASE = SABM and 0xEF
+    private const val UA_BASE = UA and 0xEF
+    private const val DM_BASE = DM and 0xEF
+    private const val DISC_BASE = DISC and 0xEF
+    private const val UIH_BASE = UIH and 0xEF
 
     /** El canal 0 es el de control del multiplexor, no lleva datos. */
     const val DLCI_CONTROL = 0
@@ -126,7 +146,7 @@ object Rfcomm {
 
         val cabezaArr = cabeza.toByteArray()
         // El FCS cubre 2 bytes en UIH y 3 en el resto. Esta en la norma.
-        val cubre = if ((control and 0xEF) == UIH) 2 else 3
+        val cubre = if ((control and 0xEF) == UIH_BASE) 2 else 3
         val f = fcs(cabezaArr, minOf(cubre, cabezaArr.size))
 
         val salida = ByteArray(cabezaArr.size + largo + 1)
@@ -143,10 +163,11 @@ object Rfcomm {
         val datos: ByteArray,
         val creditos: Int,
     ) {
-        val esUih: Boolean get() = (control and 0xEF) == UIH
-        val esUa: Boolean get() = (control and 0xEF) == UA
-        val esDm: Boolean get() = (control and 0xEF) == DM
-        val esDisc: Boolean get() = (control and 0xEF) == DISC
+        val esUih: Boolean get() = (control and 0xEF) == UIH_BASE
+        val esUa: Boolean get() = (control and 0xEF) == UA_BASE
+        val esDm: Boolean get() = (control and 0xEF) == DM_BASE
+        val esDisc: Boolean get() = (control and 0xEF) == DISC_BASE
+        val esSabm: Boolean get() = (control and 0xEF) == SABM_BASE
     }
 
     /**
@@ -175,7 +196,7 @@ object Rfcomm {
             i += 2
         }
 
-        val esUih = (control and 0xEF) == UIH
+        val esUih = (control and 0xEF) == UIH_BASE
         var creditos = -1
         if (esUih && (control and PF) != 0) {
             if (i >= b.size) return null

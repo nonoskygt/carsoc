@@ -3,7 +3,7 @@ package com.nonosky.s2000dash.bateria
 import android.content.Context
 import android.hardware.usb.UsbManager
 import android.util.Log
-import com.nonosky.s2000dash.hci.DuenoDongle
+import com.nonosky.s2000dash.hci.RadioBt
 import com.nonosky.s2000dash.hci.HciUsb
 import kotlin.concurrent.thread
 
@@ -94,94 +94,92 @@ class VigilanteBateria(private val context: Context) {
      * era "el BMS dejo de contestar" — que apunta al BMS y no al conflicto.
      */
     private fun unaRonda() {
-        val hecho = DuenoDongle.usar("vigilante-bateria", esperaMs = 3_000) { rondaConDongle() }
-        if (hecho == null) {
-            publicar(estado.copy(detalle = "el dongle lo tiene ${DuenoDongle.ocupadoPor() ?: "otro"}"))
-        }
+        // Ya no hay candado: la radio es compartida y el barrido convive con el
+        // enlace del motor. Lo unico que sigue siendo cierto es que barrer y
+        // mantener un enlace LE a la vez es delicado en muchos controladores,
+        // asi que el barrido solo se hace cuando aun no sabemos la MAC.
+        rondaConDongle()
     }
 
+    /**
+     * Una ronda: si ya sabemos la MAC, se lee y punto; si no, se barre.
+     *
+     * Barrer y mantener enlaces a la vez es delicado en muchos controladores,
+     * y ademas ya no hace falta: una vez conocida la MAC, el barrido no
+     * aporta nada y solo estorba al enlace del motor.
+     *
+     * Y sobre todo: esto ya **no abre el aparato USB por su cuenta**. Lo hacia,
+     * y ese fue el fallo que dejo al motor y a la bateria sin datos en plena
+     * manejada: al reclamar la interfaz USB para barrer, ni el OBD ni el GATT
+     * podian entrar. Antes lo tapaba un candado; al quitar el candado por la
+     * radio compartida, el descuido quedo al descubierto. Ahora todo pasa por
+     * [RadioBt].
+     */
     private fun rondaConDongle() {
-        val um = context.getSystemService(Context.USB_SERVICE) as? UsbManager
-            ?: return publicar(estado.copy(enlace = EnlaceBateria.SinDongle, detalle = "sin UsbManager"))
+        val conocida = macFijada ?: estado.mac
+        if (conocida != null) {
+            leerBms(conocida)
+            return
+        }
+        barrerParaEncontrarla()
+    }
 
-        val dongle = HciUsb.buscarDongle(um)
-            ?: return publicar(estado.copy(enlace = EnlaceBateria.SinDongle, detalle = "no hay dongle en el USB"))
-
-        val hci = HciUsb(um, dongle)
+    /** Barrido BLE, solo mientras no se sepa a quien conectarse. */
+    private fun barrerParaEncontrarla() {
+        val piezas = RadioBt.tomar(context, "vigilante-bateria")
+        if (piezas == null) {
+            publicar(estado.copy(
+                enlace = EnlaceBateria.SinDongle,
+                detalle = RadioBt.ultimoFallo ?: "no se pudo abrir la radio",
+            ))
+            return
+        }
+        val hci = piezas.hci
         try {
-            val traza = hci.abrir()
-            if (traza.any { it.startsWith("ERROR") }) {
-                publicar(estado.copy(enlace = EnlaceBateria.DongleMudo, detalle = traza.last()))
-                return
-            }
-
-            while (hci.leerEvento(100) != null) { /* vaciar lo viejo */ }
-
-            hci.mandarComando(HciUsb.CMD_RESET)
-            hci.leerEvento(1_500)
-
-            // Barrido PASIVO: para oir a un BMS que se anuncia basta escuchar,
-            // y asi no se ensucia el aire con peticiones de barrido activo.
             hci.mandarComando(
                 HciUsb.CMD_LE_SET_SCAN_PARAMS,
                 byteArrayOf(0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00),
             )
-            hci.leerEvento(1_500)
             hci.mandarComando(HciUsb.CMD_LE_SET_SCAN_ENABLE, byteArrayOf(0x01, 0x00))
-            hci.leerEvento(1_500)
 
             if (!estado.detectada()) {
                 publicar(estado.copy(enlace = EnlaceBateria.Buscando, detalle = null))
             }
 
-            // Se escucha la ronda ENTERA y se guardan todas, en vez de
-            // quedarse con la primera. Quedarse con la primera hizo que se
-            // leyera la bateria de una BICICLETA durante un rato: tambien es
-            // un BMS JBD, tambien anuncia el servicio 0xFF00, y llegaba antes.
             val oidas = linkedMapOf<String, Hallazgo>()
             val hasta = System.currentTimeMillis() + BARRIDO_MS
             while (vivo && System.currentTimeMillis() < hasta) {
                 val e = hci.leerEvento(400) ?: continue
-                val hallazgo = interpretarAnuncio(e) ?: continue
-                oidas[hallazgo.mac] = hallazgo
-            }
-
-            val elegida = elegir(oidas.values.toList())
-            val encontrada = elegida != null
-            if (elegida != null) {
-                publicar(
-                    estado.copy(
-                        mac = elegida.mac,
-                        nombre = elegida.nombre ?: estado.nombre,
-                        rssi = elegida.rssi,
-                        vistaMs = System.currentTimeMillis(),
-                        enlace = EnlaceBateria.Detectada,
-                        detalle = null,
-                        candidatas = oidas.values.map {
-                            "${it.mac}  ${it.nombre ?: "(sin nombre)"}  ${it.rssi} dBm" +
-                                if (it.mac == elegida.mac) "  <- elegida" else ""
-                        },
-                    )
-                )
+                val h = interpretarAnuncio(e) ?: continue
+                oidas[h.mac] = h
             }
 
             hci.mandarComando(HciUsb.CMD_LE_SET_SCAN_ENABLE, byteArrayOf(0x00, 0x00))
 
-            // Cerrar el barrido antes de conectar: el controlador no puede
-            // barrer y mantener un enlace a la vez de forma fiable.
-            if (encontrada) {
-                runCatching { hci.cerrar() }
-                estado.mac?.let { leerBms(it) }
-                return
-            }
-
-            if (!encontrada && estado.detectada() && estado.rancia(System.currentTimeMillis())) {
-                publicar(estado.copy(enlace = EnlaceBateria.Buscando, detalle = "dejo de anunciarse"))
+            val elegida = elegir(oidas.values.toList())
+            if (elegida != null) {
+                publicar(estado.copy(
+                    mac = elegida.mac,
+                    nombre = elegida.nombre ?: estado.nombre,
+                    rssi = elegida.rssi,
+                    vistaMs = System.currentTimeMillis(),
+                    enlace = EnlaceBateria.Detectada,
+                    detalle = null,
+                    candidatas = oidas.values.map {
+                        "${it.mac}  ${it.nombre ?: "(sin nombre)"}  ${it.rssi} dBm" +
+                            if (it.mac == elegida.mac) "  <- elegida" else ""
+                    },
+                ))
+            } else {
+                publicar(estado.copy(enlace = EnlaceBateria.Buscando, detalle = "no se oyo ninguna BMS"))
             }
         } catch (e: Exception) {
-            publicar(estado.copy(enlace = EnlaceBateria.Fallo, detalle = "${e.javaClass.simpleName}: ${e.message}"))
+            publicar(estado.copy(
+                enlace = EnlaceBateria.Fallo,
+                detalle = "${e.javaClass.simpleName}: ${e.message}",
+            ))
         } finally {
-            runCatching { hci.cerrar() }
+            RadioBt.soltar("vigilante-bateria")
         }
     }
 
@@ -340,7 +338,7 @@ class VigilanteBateria(private val context: Context) {
          * recurso compartido y abrirlo cada segundo para reconfirmar lo que ya
          * se sabe solo quita tiempo a lo que venga despues (el GATT).
          */
-        const val ESPERA_DETECTADA_MS = 30_000L
+        const val ESPERA_DETECTADA_MS = 2_000L
 
         /** Sin detectar, se insiste mas seguido. */
         const val ESPERA_BUSCANDO_MS = 10_000L

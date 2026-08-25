@@ -3,7 +3,7 @@ package com.nonosky.s2000dash.bateria
 import android.content.Context
 import android.hardware.usb.UsbManager
 import com.nonosky.s2000dash.hci.BombaHci
-import com.nonosky.s2000dash.hci.DuenoDongle
+import com.nonosky.s2000dash.hci.RadioBt
 import com.nonosky.s2000dash.hci.ConexionLe
 import com.nonosky.s2000dash.hci.GestorL2cap
 import com.nonosky.s2000dash.hci.HciUsb
@@ -104,9 +104,10 @@ class CanalGattHci private constructor(
                 ConexionLe.parametrosDesconectar(handle),
             )
         }
-        runCatching { gestor.detener() }
-        runCatching { bomba.detener() }
-        runCatching { hci.cerrar() }
+        // La radio NO se cierra aqui: puede haber un enlace del motor vivo en
+        // ella. Solo se suelta la referencia, y RadioBt cierra cuando nadie
+        // quede. Cerrarla de golpe tiraria el OBD sin motivo.
+        RadioBt.soltar("gatt-bateria")
     }
 
     companion object {
@@ -117,43 +118,39 @@ class CanalGattHci private constructor(
          * Devuelve null si algo falla, y la traza cuenta hasta donde se llego:
          * en un radio sin shell, "no se pudo" a secas no permite arreglar nada.
          */
-        fun abrir(context: Context, mac: String): Pair<CanalGattHci?, List<String>> =
-            DuenoDongle.usar("gatt-bateria", esperaMs = 5_000) { abrirConDongle(context, mac) }
-                ?: (null to listOf(
-                    "el dongle lo tiene " + (DuenoDongle.ocupadoPor() ?: "otro") +
-                        "; se reintenta luego"
-                ))
-
-        private fun abrirConDongle(context: Context, mac: String): Pair<CanalGattHci?, List<String>> {
+        /**
+         * Abre el camino a la bateria sobre la radio COMPARTIDA.
+         *
+         * Antes cada consumidor abria su propio HciUsb y habia que serializarlos
+         * con un candado, lo que obligaba a repartir el dongle por turnos: el
+         * motor en linea a ratos y la bateria a ratos. Un controlador de doble
+         * modo aguanta el enlace LE y el clasico a la vez, asi que el reparto
+         * era mio, no del aparato.
+         */
+        fun abrir(context: Context, mac: String): Pair<CanalGattHci?, List<String>> {
             val traza = mutableListOf<String>()
 
-            val um = context.getSystemService(Context.USB_SERVICE) as? UsbManager
-                ?: return null to listOf("ERROR: este radio no expone UsbManager")
-
-            val dongle = HciUsb.buscarDongle(um)
-                ?: return null to listOf("ERROR: no hay dongle Bluetooth en el USB")
-
-            val hci = HciUsb(um, dongle)
-            val abierto = hci.abrir()
-            traza += abierto
-            if (abierto.any { it.startsWith("ERROR") }) {
-                runCatching { hci.cerrar() }
-                return null to traza
+            val piezas = RadioBt.tomar(context, "gatt-bateria")
+                ?: return null to (RadioBt.traza + listOf(
+                    "ERROR: no se pudo abrir la radio: ${RadioBt.ultimoFallo}"
+                ))
+            var conservar = false
+            try {
+                return abrirSobreRadio(piezas, mac, traza).also { conservar = it.first != null }
+            } finally {
+                // Si no salio canal, se suelta ya. Si salio, lo suelta cerrar().
+                if (!conservar) RadioBt.soltar("gatt-bateria")
             }
+        }
 
-            val bomba = BombaHci(hci)
-            if (!bomba.arrancar()) {
-                traza += "ERROR: la bomba de HCI no arranco"
-                runCatching { hci.cerrar() }
-                return null to traza
-            }
-
-            // Sin esto no se sabe cuantos paquetes ACL admite el controlador, y
-            // pasarse desborda su cola: deja de contestar y parece colgado.
-            traza += bomba.configurarDesdeLe()
-
-            val gestor = GestorL2cap(bomba)
-            gestor.arrancar()
+        private fun abrirSobreRadio(
+            piezas: RadioBt.Piezas,
+            mac: String,
+            traza: MutableList<String>,
+        ): Pair<CanalGattHci?, List<String>> {
+            val hci = piezas.hci
+            val bomba = piezas.bomba
+            val gestor = piezas.gestor
 
             traza += "conectando por LE con $mac"
             val estado = bomba.comando(
@@ -164,7 +161,6 @@ class CanalGattHci private constructor(
             traza += "Command Status de la conexion: ${st ?: "sin respuesta"}"
             if (st != 0) {
                 traza += "ERROR: el controlador rechazo la conexion"
-                cerrarTodo(hci, bomba, gestor)
                 return null to traza
             }
 
@@ -179,7 +175,6 @@ class CanalGattHci private constructor(
                     "(${completa?.let { ConexionLe.nombreEstado(it.estado) } ?: "sin evento"})"
                 // Cancelar, o el intento se queda colgado y bloquea el siguiente.
                 runCatching { bomba.comando(ConexionLe.CMD_LE_CREATE_CONNECTION_CANCEL) }
-                cerrarTodo(hci, bomba, gestor)
                 return null to traza
             }
 
@@ -194,10 +189,5 @@ class CanalGattHci private constructor(
             return ch to traza
         }
 
-        private fun cerrarTodo(hci: HciUsb, bomba: BombaHci, gestor: GestorL2cap) {
-            runCatching { gestor.detener() }
-            runCatching { bomba.detener() }
-            runCatching { hci.cerrar() }
-        }
     }
 }

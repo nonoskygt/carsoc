@@ -23,7 +23,7 @@ import kotlin.concurrent.thread
  * bomba; si uno se duerme, el controlador llena su cola de eventos y todo
  * lo demas se para.
  */
-class BombaEventos(private val hci: HciUsb) {
+class BombaEventos(private val hci: HciUsb) : EventosHci {
 
     /** Copia al escribir: se suscribe y se da de baja mientras la bomba corre. */
     private val oyentes = CopyOnWriteArrayList<(ByteArray) -> Unit>()
@@ -66,7 +66,7 @@ class BombaEventos(private val hci: HciUsb) {
     }
 
     /** Devuelve la baja: llamarla libera al oyente. */
-    fun suscribir(oyente: (ByteArray) -> Unit): () -> Unit {
+    override fun suscribir(oyente: (ByteArray) -> Unit): () -> Unit {
         oyentes.add(oyente)
         return { oyentes.remove(oyente) }
     }

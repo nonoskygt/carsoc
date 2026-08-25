@@ -41,6 +41,20 @@ data class VehicleState(
     val loadAtMs: Long = 0,
     val batteryV: Float? = null,
     val batteryAtMs: Long = 0,
+    /** Relacion de equivalencia de la sonda ancha. 1.0 = estequiometrica. */
+    val lambda: Float? = null,
+    val lambdaAtMs: Long = 0,
+    /** Presion absoluta del colector, kPa. En atmosferico, el vacuometro. */
+    val mapKpa: Int? = null,
+    val mapAtMs: Long = 0,
+    val aceleradorPct: Int? = null,
+    val aceleradorAtMs: Long = 0,
+    /** Avance de encendido, grados. */
+    val avanceGrados: Int? = null,
+    val avanceAtMs: Long = 0,
+    /** Voltaje de la sonda de oxigeno. Banda estrecha: solo rica/pobre. */
+    val o2Voltaje: Float? = null,
+    val o2AtMs: Long = 0,
     val connection: ConnectionState = ConnectionState.Disconnected,
     val sessionMaxRpm: Int = 0,
     /** Lo que reporto `ATDP`, para mostrar que se negocio de verdad. */

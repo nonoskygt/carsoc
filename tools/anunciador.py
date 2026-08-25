@@ -22,7 +22,12 @@ def ip_local():
     """IP de la interfaz que de verdad sale a la red, sin adivinar."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("192.168.2.1", 53))
+        # 8.8.8.8 y no la puerta de enlace del taller: no se manda ningun
+        # paquete, solo se le pide al sistema por que interfaz saldria. Con una
+        # IP fija de una red concreta esto devuelve None en cuanto se cambia de
+        # red — y entonces el anuncio nunca sale, el radio no encuentra el
+        # servidor, y /update contesta "started: false" sin decir por que.
+        s.connect(("8.8.8.8", 53))
         return s.getsockname()[0]
     except Exception:
         return None

@@ -28,8 +28,8 @@ import kotlin.concurrent.withLock
  */
 class CanalComandos(
     private val hci: HciUsb,
-    bomba: BombaEventos,
-) {
+    bomba: EventosHci,
+) : ComandosHci {
 
     private val candado = ReentrantLock()
 
@@ -60,7 +60,7 @@ class CanalComandos(
      * evento. Confundirlos es creer que ya hay conexion cuando solo hay una
      * promesa.
      */
-    fun ejecutar(opcode: Int, parametros: ByteArray = ByteArray(0), timeoutMs: Long = 3_000): ByteArray? =
+    override fun ejecutar(opcode: Int, parametros: ByteArray, timeoutMs: Long): ByteArray? =
         candado.withLock {
             respuestas.clear()
             esperandoOpcode = opcode

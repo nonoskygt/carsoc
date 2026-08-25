@@ -37,6 +37,9 @@ class HciObdTransport(
     /** Traza paso a paso, que es lo unico que permite depurar esto en remoto. */
     val traza = mutableListOf<String>()
 
+    /** Tramas crudas del canal, para cuando el encuadre sea el sospechoso. */
+    private val crudos = java.util.Collections.synchronizedList(mutableListOf<String>())
+
     private var hci: HciUsb? = null
     private var bomba: BombaHci? = null
     private var gestor: GestorL2cap? = null
@@ -70,6 +73,10 @@ class HciObdTransport(
     @Volatile
     private var conectado = false
 
+    /** Si tenemos una referencia de RadioBt que soltar. */
+    @Volatile
+    private var tomada = false
+
     override val isConnected: Boolean get() = conectado
 
     // --- Recepcion -----------------------------------------------------------
@@ -82,7 +89,17 @@ class HciObdTransport(
             if (handle != this.handle) return@runCatching
             val local = canal?.cidLocal ?: return@runCatching
             if (L2cap.cidDe(pdu) != local) return@runCatching
-            val t = Rfcomm.interpretar(L2cap.cargaDe(pdu)) ?: return@runCatching
+            val carga = L2cap.cargaDe(pdu)
+            // Volcar el crudo ANTES de interpretarlo. Si el FCS o el
+            // encuadre estan mal, `interpretar` devuelve null y la trama
+            // desaparece sin dejar rastro — y entonces "no contesto al SABM"
+            // no distingue entre que no contesto y que contesto algo que yo
+            // no supe leer. Son dos problemas distintos.
+            if (crudos.size < 40) crudos += "<- " + carga.joinToString("") { "%02X".format(it) }
+            val t = Rfcomm.interpretar(carga) ?: run {
+                if (crudos.size < 40) crudos += "   (no paso el encuadre/FCS de RFCOMM)"
+                return@runCatching
+            }
 
             if (t.creditos > 0) creditosSalida += t.creditos
 
@@ -106,50 +123,32 @@ class HciObdTransport(
     // --- Apertura ------------------------------------------------------------
 
     /**
-     * Toma el dongle y NO lo suelta hasta [close].
+     * Abre el enlace sobre la radio COMPARTIDA, sin acaparar el dongle.
      *
-     * A diferencia del barrido de la bateria, un enlace OBD tiene que durar:
-     * soltar el dongle entre PID dejaria que el vigilante lo abriera en medio
-     * de una sesion AT y tirara el enlace. Por eso el candado se mantiene, y
-     * por eso el vigilante esta escrito para saltarse su ronda sin caerse.
+     * La version anterior tomaba un candado exclusivo mientras durara la
+     * sesion, lo que obligaba a que la bateria y el motor se turnaran: cada
+     * uno en linea a ratos. Era una limitacion de mi diseño, no del aparato —
+     * un controlador de doble modo mantiene los dos enlaces a la vez y separa
+     * los paquetes por su handle.
      */
     override fun connect() {
-        // El fallo se guarda aparte y se relanza. DuenoDongle.usar atrapa las
-        // excepciones a proposito —sus llamadores son hilos de fondo que no
-        // pueden morir— pero aqui eso enmascaraba la causa: la primera version
-        // reportaba "el dongle lo tiene otro" cuando el dongle lo teniamos
-        // nosotros y lo que fallaba era el RESET. Un mensaje de error
-        // equivocado cuesta mas que ninguno.
-        var fallo: Exception? = null
-        val ok = com.nonosky.s2000dash.hci.DuenoDongle.usar("obd-rfcomm", esperaMs = 6_000) {
-            try {
-                conectarConDongle()
-                true
-            } catch (e: Exception) {
-                fallo = e
-                false
-            }
-        }
-        fallo?.let { throw it }
-        if (ok != true) {
-            throw IOException(
-                "no se pudo tomar el dongle; lo tiene " +
-                    (com.nonosky.s2000dash.hci.DuenoDongle.ocupadoPor() ?: "otro")
+        val piezas = com.nonosky.s2000dash.hci.RadioBt.tomar(context, "obd-rfcomm")
+            ?: throw IOException(
+                "no se pudo abrir la radio: " +
+                    (com.nonosky.s2000dash.hci.RadioBt.ultimoFallo ?: "motivo desconocido")
             )
+        tomada = true
+        try {
+            conectarSobreRadio(piezas)
+        } catch (e: Exception) {
+            runCatching { com.nonosky.s2000dash.hci.RadioBt.soltar("obd-rfcomm") }
+            tomada = false
+            throw e
         }
     }
 
-    private fun conectarConDongle() {
-        val um = context.getSystemService(Context.USB_SERVICE) as? UsbManager
-            ?: throw IOException("este radio no expone UsbManager")
-
-        val dongle = HciUsb.buscarDongle(um)
-            ?: throw IOException("no hay dongle Bluetooth en el USB")
-
-        val h = HciUsb(um, dongle)
-        val abierto = h.abrir()
-        traza += abierto
-        if (abierto.any { it.startsWith("ERROR") }) throw IOException(abierto.last())
+    private fun conectarSobreRadio(piezas: com.nonosky.s2000dash.hci.RadioBt.Piezas) {
+        val h = piezas.hci
         hci = h
 
         // --- 1. Emparejar. UNA SOLA bomba leyendo el endpoint de eventos.
@@ -166,34 +165,44 @@ class HciObdTransport(
         // El enlace sobrevive al cambio porque vive en el controlador, no en
         // el hilo que lo pidio.
         traza += "conectando por BR/EDR con $mac"
-        val bombaEventos = com.nonosky.s2000dash.hci.BombaEventos(h).also { it.arrancar() }
-        try {
+        // La bomba COMPARTIDA, no una nueva. Arrancar otra sobre el mismo
+        // endpoint de eventos hace que las dos se roben los paquetes: los
+        // comandos se quedan sin respuesta y el error dice "no se pudo preparar
+        // el controlador", que apunta al controlador cuando el problema es
+        // tener dos lectores. Paso dos veces; las interfaces de Bombeo.kt
+        // existen para que no pueda volver a pasar.
+        val bombeo = com.nonosky.s2000dash.hci.BombeoCompartido(piezas.bomba)
+        run {
             val enlace = com.nonosky.s2000dash.hci.EnlaceBrEdr(
                 hci = h,
-                bomba = bombaEventos,
-                cmd = com.nonosky.s2000dash.hci.CanalComandos(h, bombaEventos),
+                bomba = bombeo,
+                cmd = bombeo,
                 mac = mac,
             )
-            if (!enlace.preparar()) {
+            // La traza del enlace se recoge en un finally, SIEMPRE.
+            //
+            // Antes se recogia despues de conectar(), asi que cuando conectar()
+            // lanzaba —o sea, justo cuando hacia falta— se perdia entera. El
+            // resultado era un PAGE TIMEOUT desnudo, sin las lineas del INQUIRY
+            // que dicen si al aparato se le encontro y con que parametros se le
+            // pagino. Quedarse sin traza en el unico caso que importa es lo
+            // mismo que no tener traza.
+            try {
+                if (!enlace.preparar()) {
+                    throw IOException("no se pudo preparar el controlador para BR/EDR")
+                }
+                handle = enlace.conectar()
+                if (handle < 0) throw IOException("no se establecio el enlace clasico con $mac")
+                traza += "enlace clasico listo, handle=$handle"
+            } finally {
                 traza += enlace.traza
-                throw IOException("no se pudo preparar el controlador para BR/EDR")
             }
-            handle = enlace.conectar()
-            traza += enlace.traza
-            if (handle < 0) throw IOException("no se establecio el enlace clasico con $mac")
-            traza += "enlace clasico listo, handle=$handle"
-        } finally {
-            runCatching { bombaEventos.detener() }
         }
 
         // --- 2. Ahora si, la bomba de ACL, ya sin nadie mas leyendo ---
-        val b = BombaHci(h)
-        if (!b.arrancar()) throw IOException("la bomba de HCI no arranco")
+        val b = piezas.bomba
         bomba = b
-        traza += b.configurarDesdeClasico()
-
-        val g = GestorL2cap(b)
-        g.arrancar()
+        val g = piezas.gestor
         gestor = g
 
         // --- 3. Canal L2CAP al PSM de RFCOMM ---
@@ -206,11 +215,19 @@ class HciObdTransport(
 
         // --- 4. Multiplexor RFCOMM ---
         if (!abrirDlci(Rfcomm.DLCI_CONTROL)) {
+            traza += "--- crudo recibido por el canal ---"
+            traza += crudos.toList()
+            traza += "--- lo que mande ---"
+            traza += "-> SABM dlci=0: " +
+                Rfcomm.trama(Rfcomm.DLCI_CONTROL, Rfcomm.SABM or Rfcomm.PF)
+                    .joinToString("") { "%02X".format(it) }
             throw IOException("el multiplexor RFCOMM no contesto al SABM de control")
         }
         traza += "multiplexor RFCOMM abierto"
 
         if (!abrirDlci(dlci)) {
+            traza += "--- crudo recibido por el canal ---"
+            traza += crudos.toList()
             throw IOException("el canal RFCOMM $canalRfcomm fue rechazado (¿es otro canal?)")
         }
         traza += "canal RFCOMM $canalRfcomm abierto"
@@ -288,9 +305,12 @@ class HciObdTransport(
         runCatching { bomba?.quitar(this) }
         runCatching { enviarRfcomm(Rfcomm.trama(dlci, Rfcomm.DISC or Rfcomm.PF)) }
         runCatching { canal?.let { gestor?.cerrar(it) } }
-        runCatching { gestor?.detener() }
-        runCatching { bomba?.detener() }
-        runCatching { hci?.cerrar() }
+        // La radio NO se cierra aqui: la bateria puede tener su enlace LE vivo
+        // en ella. Se suelta la referencia y RadioBt cierra cuando nadie quede.
+        if (tomada) {
+            runCatching { com.nonosky.s2000dash.hci.RadioBt.soltar("obd-rfcomm") }
+            tomada = false
+        }
         hci = null
         bomba = null
         gestor = null

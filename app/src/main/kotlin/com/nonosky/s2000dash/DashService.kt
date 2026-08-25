@@ -36,6 +36,7 @@ class DashService : Service() {
     private var puente: DebugServer? = null
     private var lectorTpms: TpmsReader? = null
     private var vigilante: VigilanteBateria? = null
+    private var lectorObd: com.nonosky.s2000dash.obd.LectorObdHci? = null
     private val actualizador by lazy { UpdateChecker(applicationContext) }
 
     @Volatile
@@ -57,6 +58,8 @@ class DashService : Service() {
 
         arrancarTpms()
         arrancarBateria()
+        arrancarObd()
+        programarResurreccion()
 
         vivo = true
         arrancarRevisionPeriodica()
@@ -209,6 +212,58 @@ class DashService : Service() {
         }.onFailure { Log.w(TAG, "vigilante de bateria no arranco: ${it.message}") }
     }
 
+    /**
+     * Arranca el motor por el dongle, no por la pila de Android.
+     *
+     * La pila interna esta apagada a proposito: era ella la que le robaba el
+     * adaptador Steren al dongle y provocaba el PAGE TIMEOUT. Todo el
+     * Bluetooth del tablero pasa ahora por el dongle USB.
+     */
+    private fun arrancarObd() {
+        runCatching {
+            val l = com.nonosky.s2000dash.obd.LectorObdHci(applicationContext, MAC_OBD)
+            lectorObd = l
+            EstadoActual.lectorObd = l
+            EstadoActual.comandoObd = { cmds -> l.preguntar(cmds) }
+            l.arrancar()
+        }.onFailure { Log.w(TAG, "el lector de OBD no arranco: ${it.message}") }
+    }
+
+    /**
+     * Si el sistema mata el servicio, que se reprograme solo.
+     *
+     * START_STICKY ya pide que Android lo reviva, pero en estas ROMs el
+     * "gestor de bateria" del fabricante mata servicios y a veces NO los
+     * devuelve. Una alarma programada es la red de seguridad: aunque el
+     * proceso muera entero, el sistema lo vuelve a levantar a la hora fijada.
+     *
+     * El dueño reporto tener que abrir la app a mano tras cada reinicio; esto
+     * ataca justo eso, sin depender de que el fabricante respete el
+     * BOOT_COMPLETED ni de las listas blancas de autoarranque.
+     */
+    private fun programarResurreccion() {
+        runCatching {
+            val am = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            val i = Intent(this, BootReceiver::class.java)
+                .setAction(ACCION_RESUCITAR)
+            val pi = android.app.PendingIntent.getBroadcast(
+                this, 42, i,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                        android.app.PendingIntent.FLAG_IMMUTABLE else 0),
+            )
+            // Repetitiva y no exacta: no hace falta puntualidad, solo que
+            // alguien pregunte de vez en cuando si el tablero sigue vivo.
+            am.setInexactRepeating(
+                android.app.AlarmManager.ELAPSED_REALTIME,
+                android.os.SystemClock.elapsedRealtime() + INTERVALO_RESURRECCION_MS,
+                INTERVALO_RESURRECCION_MS,
+                pi,
+            )
+            Log.i(TAG, "resurreccion programada cada ${INTERVALO_RESURRECCION_MS / 60000} min")
+        }.onFailure { Log.w(TAG, "no se pudo programar la resurreccion: ${it.message}") }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // START_STICKY: si el sistema lo mata por memoria, que vuelva. En un
         // head unit con poca RAM eso pasa mas de lo que uno quisiera.
@@ -217,6 +272,9 @@ class DashService : Service() {
 
     override fun onDestroy() {
         vivo = false
+        runCatching { lectorObd?.detener() }
+        lectorObd = null
+        EstadoActual.lectorObd = null
         runCatching { vigilante?.detener() }
         vigilante = null
         EstadoActual.vigilanteBateria = null
@@ -289,6 +347,21 @@ class DashService : Service() {
         private const val CANAL = "s2000dash"
         private const val ID_NOTIFICACION = 1
         private const val INTERVALO_MS = 15 * 60 * 1000L
+
+        /**
+         * El adaptador OBD, por MAC.
+         *
+         * Va fija y no elegida por el usuario porque la pila de Android esta
+         * apagada: ya no hay lista de emparejados que ofrecer. El dongle
+         * pagina esta direccion directamente.
+         */
+        private const val MAC_OBD = "00:1D:A5:68:98:8B"
+
+        /** Accion de la alarma que comprueba que el tablero sigue en pie. */
+        const val ACCION_RESUCITAR = "com.nonosky.s2000dash.RESUCITAR"
+
+        /** Cada cuanto se comprueba. Diez minutos no molesta a nadie. */
+        private const val INTERVALO_RESURRECCION_MS = 10 * 60 * 1000L
 
         /** Arranca el servicio si no lo esta. Idempotente. */
         fun arrancar(context: Context) {

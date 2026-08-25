@@ -85,8 +85,15 @@ class LlavesEnPreferencias(context: Context) : AlmacenLlaves {
  */
 class EnlaceBrEdr(
     private val hci: HciUsb,
-    private val bomba: BombaEventos,
-    private val cmd: CanalComandos,
+    /**
+     * Solo las capacidades, no la implementacion.
+     *
+     * Asi el enlace sirve tanto con la bomba de un solo dueño como con la
+     * compartida, y —sobre todo— no puede arrancar una segunda bomba sobre el
+     * mismo endpoint, que es el error que ya costo dos depuraciones.
+     */
+    private val bomba: EventosHci,
+    private val cmd: ComandosHci,
     private val mac: String,
     private val almacen: AlmacenLlaves? = null,
     /**

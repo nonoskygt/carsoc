@@ -99,6 +99,12 @@
                      y hay que volver a levantar el tablero. -->
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
+            <intent-filter>
+                <!-- La alarma de resurreccion. El dueño tenia que abrir la app
+                     a mano tras cada reinicio: estas ROMs matan servicios y no
+                     siempre respetan BOOT_COMPLETED ni START_STICKY. -->
+                <action android:name="com.nonosky.s2000dash.RESUCITAR" />
+            </intent-filter>
         </receiver>
 
         <!-- Lo que el confirmador ve en pantalla; sin esto no hay forma de

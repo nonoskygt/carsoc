@@ -106,6 +106,12 @@ class DashActivity : ComponentActivity() {
         EstadoActual.alCambiarBateria = {
             runOnUiThread {
                 EstadoActual.vigilanteBateria?.let { dashView.setBateria(it.estado) }
+
+        // El motor ahora lo sondea el servicio por el dongle, no la Activity
+        // por la pila de Android — que esta apagada a proposito.
+        EstadoActual.alCambiarObd = {
+            runOnUiThread { dashView.setState(EstadoActual.ultimo) }
+        }
             }
         }
         EstadoActual.vigilanteBateria?.let { dashView.setBateria(it.estado) }
