@@ -145,6 +145,16 @@ object EstadoActual {
     @Volatile
     var comandoObd: ((List<String>) -> List<String>)? = null
 
+    /**
+     * Enciende o apaga una fuente en caliente.
+     *
+     * El tablero arranca en minimo —solo llantas— y las fuentes caras se
+     * encienden a mano midiendo la temperatura entre cada una. Es la respuesta
+     * a que el radio se apagara tres veces por calor.
+     */
+    @Volatile
+    var encenderFuente: ((String, Boolean) -> String)? = null
+
     /** El lector del motor, para exponer su traza por HTTP. */
     @Volatile
     var lectorObd: com.nonosky.s2000dash.obd.LectorObdHci? = null

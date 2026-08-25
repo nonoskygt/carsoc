@@ -116,6 +116,14 @@ class LectorObdHci(
      * que no sirve para mirar de reojo mientras se maneja.
      */
     private fun unTurno() {
+        // Con el radio caliente no se abre enlace: el sondeo del motor es lo
+        // que mas CPU gasta de todo el tablero.
+        if (!com.nonosky.s2000dash.Termometro.permiteObd()) {
+            EstadoActual.ultimoErrorEnlace =
+                "en pausa: radio a ${com.nonosky.s2000dash.Termometro.gradosC} C"
+            publicar(ConnectionState.Disconnected)
+            return
+        }
         publicar(ConnectionState.Connecting)
         turnoConDongle()
         cicloDeTurnos++
@@ -135,7 +143,9 @@ class LectorObdHci(
             publicar(ConnectionState.Polling, protocolo = info.describedAs)
 
             val hasta = System.currentTimeMillis() + TURNO_MS
-            while (vivo && System.currentTimeMillis() < hasta && t.isConnected) {
+            while (vivo && System.currentTimeMillis() < hasta && t.isConnected &&
+                com.nonosky.s2000dash.Termometro.permiteObd()
+            ) {
                 synchronized(candadoSesion) { sondearUnaVuelta(sesion) }
                 runCatching { Thread.sleep(ENTRE_VUELTAS_MS) }
             }
@@ -224,6 +234,14 @@ class LectorObdHci(
          * una vuelta tarda algo mas de medio segundo: con esta pausa sale
          * alrededor de un segundo por vuelta, que es lo pedido sin ahogar el bus.
          */
-        const val ENTRE_VUELTAS_MS = 350L
+        /**
+         * Un segundo entre vueltas.
+         *
+         * La K-line del AP1 da unas 9 lecturas por segundo y una vuelta gasta
+         * ocho peticiones, asi que el bus ya esta al limite: pedir mas seguido
+         * no trae datos mas frescos, solo calienta la CPU esperando respuestas
+         * que el bus no puede dar mas rapido.
+         */
+        const val ENTRE_VUELTAS_MS = 1_000L
     }
 }

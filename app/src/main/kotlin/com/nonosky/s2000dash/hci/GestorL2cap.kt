@@ -469,10 +469,38 @@ class GestorL2cap(private val bomba: BombaHci) : BombaHci.Oyente {
         }
     }
 
-    private fun responder(handle: Int, cid: Int, mensaje: ByteArray): Boolean =
-        runCatching { bomba.enviarAcl(handle, cid, mensaje, 2_000) }
-            .onFailure { Log.w(TAG, "no se pudo responder senalizacion: ${it.message}") }
-            .getOrDefault(false)
+    /**
+     * Contesta un mensaje de señalizacion **sin bloquear el reparto**.
+     *
+     * Este metodo se llama desde `alPdu`, o sea desde el hilo de reparto de la
+     * bomba, que atiende a TODOS los oyentes en serie. La version anterior
+     * hacia `enviarAcl(..., 2_000)`, que espera hasta dos segundos a que haya
+     * credito ACL — y durante esos dos segundos se paraban tambien:
+     *
+     *   - las notificaciones ATT del BMS (la bateria dejaba de actualizarse),
+     *   - los bytes del ELM327 (el motor se congelaba),
+     *   - y los avisos de caida de enlace, que es lo peor: todo el mundo
+     *     seguia creyendo que su enlace vivia.
+     *
+     * Justo cuando falta credito —o sea, cuando el controlador va saturado— es
+     * cuando mas trafico hay que repartir. Bloquear ahi es bloquear en el peor
+     * momento posible.
+     *
+     * Ahora se manda en un hilo aparte y se vuelve de inmediato. La
+     * señalizacion L2CAP tolera de sobra ese retraso: sus plazos son de
+     * segundos y hay reintentos por encima.
+     */
+    private fun responder(handle: Int, cid: Int, mensaje: ByteArray): Boolean {
+        runCatching {
+            kotlin.concurrent.thread(name = "l2cap-responde", isDaemon = true) {
+                runCatching { bomba.enviarAcl(handle, cid, mensaje, 2_000) }
+                    .onFailure { Log.w(TAG, "no se pudo responder senalizacion: ${it.message}") }
+            }
+        }.onFailure { Log.w(TAG, "no se pudo lanzar la respuesta: ${it.message}") }
+        // Se devuelve true porque la respuesta quedo ENCARGADA. Si de verdad
+        // no sale, el otro extremo reintenta: eso lo cubre el protocolo.
+        return true
+    }
 
     private fun despertar(m: SenalizacionL2cap.Mensaje) {
         val esp = esperas[m.id] ?: return

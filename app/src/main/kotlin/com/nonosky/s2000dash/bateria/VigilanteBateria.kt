@@ -94,6 +94,12 @@ class VigilanteBateria(private val context: Context) {
      * era "el BMS dejo de contestar" — que apunta al BMS y no al conflicto.
      */
     private fun unaRonda() {
+        // El termometro manda: con el radio caliente, la bateria es lo primero
+        // que se suelta. Sus datos cambian despacio y su lectura es cara.
+        if (!com.nonosky.s2000dash.Termometro.permiteBateria()) {
+            publicar(estado.copy(detalle = "en pausa por temperatura del radio"))
+            return
+        }
         // Ya no hay candado: la radio es compartida y el barrido convive con el
         // enlace del motor. Lo unico que sigue siendo cierto es que barrer y
         // mantener un enlace LE a la vez es delicado en muchos controladores,
@@ -116,7 +122,7 @@ class VigilanteBateria(private val context: Context) {
      * [RadioBt].
      */
     private fun rondaConDongle() {
-        val conocida = macFijada ?: estado.mac
+        val conocida = macFijada ?: estado.mac ?: macRecordada
         if (conocida != null) {
             leerBms(conocida)
             return
@@ -158,6 +164,9 @@ class VigilanteBateria(private val context: Context) {
 
             val elegida = elegir(oidas.values.toList())
             if (elegida != null) {
+                // Se recuerda en disco: tras un reinicio se va directo al GATT
+                // en vez de volver a barrer para redescubrir lo mismo.
+                macRecordada = elegida.mac
                 publicar(estado.copy(
                     mac = elegida.mac,
                     nombre = elegida.nombre ?: estado.nombre,
@@ -268,9 +277,43 @@ class VigilanteBateria(private val context: Context) {
         return oidas.maxByOrNull { it.rssi }
     }
 
-    /** MAC fijada a mano por HTTP, para zanjar cualquier ambiguedad. */
-    @Volatile
-    var macFijada: String? = null
+    /**
+     * MAC fijada a mano, **guardada en disco**.
+     *
+     * Vivia solo en memoria y se perdia en cada reinicio del proceso — que en
+     * este radio pasa a menudo: cambio de red, actualizacion, o el gestor de
+     * bateria de la ROM. Al perderse, el vigilante volvia a elegir por su
+     * cuenta y llego a leer la bateria de una BICICLETA, que tambien es un BMS
+     * JBD y tambien anuncia el servicio 0xFF00.
+     *
+     * Elegir mal una bateria no es un detalle cosmetico: son los numeros con
+     * los que alguien decide si su pack de litio esta bien.
+     */
+    var macFijada: String?
+        get() = prefs.getString(CLAVE_MAC_FIJA, null)
+        set(v) {
+            prefs.edit().apply {
+                if (v.isNullOrBlank()) remove(CLAVE_MAC_FIJA) else putString(CLAVE_MAC_FIJA, v)
+            }.apply()
+        }
+
+    /**
+     * La ultima MAC que se descubrio sola, tambien en disco.
+     *
+     * Sirve para que tras un reinicio se vaya directo al GATT en vez de
+     * gastar un barrido de seis segundos redescubriendo lo que ya se sabia.
+     */
+    private var macRecordada: String?
+        get() = prefs.getString(CLAVE_MAC_VISTA, null)
+        set(v) {
+            prefs.edit().apply {
+                if (v.isNullOrBlank()) remove(CLAVE_MAC_VISTA) else putString(CLAVE_MAC_VISTA, v)
+            }.apply()
+        }
+
+    private val prefs by lazy {
+        context.getSharedPreferences("bateria", Context.MODE_PRIVATE)
+    }
 
     /**
      * Saca la bateria de un LE Advertising Report, si es ella.
@@ -338,7 +381,20 @@ class VigilanteBateria(private val context: Context) {
          * recurso compartido y abrirlo cada segundo para reconfirmar lo que ya
          * se sabe solo quita tiempo a lo que venga despues (el GATT).
          */
-        const val ESPERA_DETECTADA_MS = 2_000L
+        /**
+         * 30 segundos entre lecturas de la bateria. NO 2.
+         *
+         * Se bajo a 2 s cuando el dueño pidio "tiempo real", y eso fue el
+         * error que recalento el radio: cada ronda abre una conexion BLE
+         * COMPLETA —conectar, descubrir servicios, negociar MTU, activar el
+         * CCCD, dos peticiones y desconectar— asi que eran treinta ciclos por
+         * minuto martilleando el dongle y la CPU sin parar.
+         *
+         * Y no aportaba nada: un SoC no se mueve en dos segundos, ni el
+         * voltaje de una LiFePO4. "Tiempo real" tiene sentido para las RPM,
+         * no para el estado de carga de una bateria.
+         */
+        const val ESPERA_DETECTADA_MS = 30_000L
 
         /** Sin detectar, se insiste mas seguido. */
         const val ESPERA_BUSCANDO_MS = 10_000L
@@ -351,5 +407,8 @@ class VigilanteBateria(private val context: Context) {
          * las candidatas.
          */
         const val NOMBRE_DEL_CARRO = "S2000"
+
+        const val CLAVE_MAC_FIJA = "mac_fijada"
+        const val CLAVE_MAC_VISTA = "mac_vista"
     }
 }

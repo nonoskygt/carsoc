@@ -47,6 +47,22 @@ class DebugServer(
     @Volatile private var server: ServerSocket? = null
     @Volatile private var running = false
 
+    /**
+     * Atendedores acotados. Cuatro bastan: las rutas son de una en una y
+     * nadie mas que la laptop del taller habla con esto.
+     */
+    private val piscina = java.util.concurrent.ThreadPoolExecutor(
+        1, MAX_ATENDEDORES, 30L, java.util.concurrent.TimeUnit.SECONDS,
+        java.util.concurrent.ArrayBlockingQueue(COLA_PETICIONES),
+        { r -> Thread(r, "puente-atiende").apply { isDaemon = true } },
+        java.util.concurrent.ThreadPoolExecutor.AbortPolicy(),
+    )
+
+    /** Peticiones rechazadas por estar lleno. Sirve para saber si pasa. */
+    @Volatile
+    var rechazadas = 0L
+        private set
+
     fun start() {
         if (running) return
         running = true
@@ -87,9 +103,25 @@ class DebugServer(
                     // entero. Un simple escaneo de puertos que abriera la
                     // conexion sin escribir nada tumbaba el tablero a mitad
                     // de camino, igual que cortar un curl a la mitad.
-                    thread(isDaemon = true) {
-                        runCatching { handle(client) }
-                            .onFailure { Log.w(TAG, "peticion fallida: ${it.message}") }
+                    // Pool ACOTADO, no un hilo por conexion.
+                    //
+                    // Un hilo por peticion parecia inofensivo hasta que se
+                    // sumo el plazo de 40 s: una conexion que se abre y NO
+                    // MANDA NADA ocupa un hilo cuarenta segundos. Un escaneo
+                    // de puertos, un navegador con varias pestañas, o un
+                    // cliente que se corta a la mitad bastan para acumular
+                    // decenas de hilos parados en el mismo aparato que ya va
+                    // justo. Con pool, lo que sobra se rechaza y se cuenta.
+                    val aceptada = runCatching {
+                        piscina.execute {
+                            runCatching { handle(client) }
+                                .onFailure { Log.w(TAG, "peticion fallida: ${it.message}") }
+                        }
+                        true
+                    }.getOrDefault(false)
+                    if (!aceptada) {
+                        rechazadas++
+                        runCatching { client.close() }
                     }
                 }
             } catch (e: Exception) {
@@ -108,9 +140,14 @@ class DebugServer(
 
     private fun handle(client: Socket) {
         client.use { sock ->
-            // El barrido de Bluetooth tarda; el resto de rutas contestan al
-            // instante, asi que un timeout largo aqui no cuesta nada.
-            sock.soTimeout = 40_000
+            // DOS plazos, no uno.
+            //
+            // Antes se ponia 40 s desde el principio "porque el barrido de
+            // Bluetooth tarda". Eso hacia que una conexion que no manda NADA
+            // se quedara cuarenta segundos ocupando un atendedor. El plazo
+            // largo hace falta para ESPERAR LA RESPUESTA de una ruta lenta, no
+            // para esperar a que el cliente se digne a hablar.
+            sock.soTimeout = PLAZO_LEER_PETICION_MS
             val reader = sock.getInputStream().bufferedReader()
             val request = readLineAcotada(reader) ?: return
             val ruta = request.split(" ").getOrNull(1) ?: "/"
@@ -122,6 +159,10 @@ class DebugServer(
                 val l = readLineAcotada(reader) ?: break
                 if (l.isBlank()) break
             }
+
+            // Ya sabemos que ruta es: si es de las que tardan (barridos,
+            // GATT, emparejamientos), ahora si se amplia el plazo.
+            if (path in RUTAS_LENTAS) sock.soTimeout = PLAZO_RUTA_LENTA_MS
 
             val out = sock.getOutputStream()
             when (path) {
@@ -243,9 +284,16 @@ class DebugServer(
                 "/bateria-fijar" -> {
                     // Zanja la ambiguedad cuando hay mas de un BMS en el aire.
                     val mac = consulta["mac"]
-                    EstadoActual.vigilanteBateria?.macFijada = mac
+                    val v = EstadoActual.vigilanteBateria
+                    v?.macFijada = mac
+                    // Se relee de disco para confirmar que quedo guardada de
+                    // verdad, en vez de repetir lo que se acaba de mandar: la
+                    // pregunta que importa es "¿sobrevive al reinicio?", y eso
+                    // solo lo contesta lo que hay en el archivo.
+                    val guardada = v?.macFijada
                     sendText(out, 200, "application/json",
-                        """{"fijada":${org.json.JSONObject.quote(mac ?: "")}}""")
+                        """{"fijada":${org.json.JSONObject.quote(guardada ?: "")},""" +
+                            ""","persistida":${guardada != null}}""")
                 }
                 "/obd-hci" -> {
                     val mac = consulta["mac"] ?: "00:1D:A5:68:98:8B"
@@ -267,6 +315,17 @@ class DebugServer(
                         .getOrNull() ?: listOf("ERROR: el servicio no registro el canal AT")
                     sendText(out, 200, "text/plain", lista.joinToString(SALTO))
                 }
+                "/fuente" -> {
+                    // /fuente?cual=motor&on=1  — se suben de a una, midiendo.
+                    val cual = consulta["cual"] ?: ""
+                    val on = consulta["on"] != "0"
+                    val r = runCatching { EstadoActual.encenderFuente?.invoke(cual, on) }
+                        .getOrNull() ?: "el servicio no registro los interruptores"
+                    sendText(out, 200, "application/json",
+                        """{"resultado":${org.json.JSONObject.quote(r)}}""")
+                }
+                "/termica" -> sendText(out, 200, "text/plain",
+                    com.nonosky.s2000dash.Termometro.diagnostico().joinToString(SALTO))
                 "/tpms" -> sendText(out, 200, "text/plain", tpmsTexto())
                 "/bateria" -> {
                     val v = EstadoActual.vigilanteBateria
@@ -560,6 +619,25 @@ class DebugServer(
         const val REINTENTOS_BIND = 10
         const val MAX_LINEA = 4_096
         const val MAX_CABECERAS = 64
+
+        /** Atendedores a la vez. Mas seria malgastar en este aparato. */
+        const val MAX_ATENDEDORES = 4
+
+        /** Peticiones en espera antes de empezar a rechazar. */
+        const val COLA_PETICIONES = 8
+
+        /** Lo que se le concede a un cliente para mandar su peticion. */
+        const val PLAZO_LEER_PETICION_MS = 3_000
+
+        /** Lo que se concede DESPUES, y solo a las rutas que de verdad tardan. */
+        const val PLAZO_RUTA_LENTA_MS = 120_000
+
+        /** Las que hacen radio o USB y pueden tardar de verdad. */
+        val RUTAS_LENTAS = setOf(
+            "/buscar", "/emparejar", "/ble", "/gatt", "/hci", "/hci-ble",
+            "/serial", "/bateria-gatt", "/obd-hci", "/update",
+            "/instalar-companero", "/pantalla", "/apps",
+        )
         val HELP = """
             S2000 Dash - puente de diagnostico
               /state     estado del vehiculo y del enlace (JSON)

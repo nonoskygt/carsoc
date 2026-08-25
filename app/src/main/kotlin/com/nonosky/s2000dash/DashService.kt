@@ -42,6 +42,10 @@ class DashService : Service() {
     @Volatile
     private var vivo = false
 
+    /** Para que el termometro arranque aunque `vivo` aun no sea true. */
+    @Volatile
+    private var arranco = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -56,12 +60,23 @@ class DashService : Service() {
 
         registrarDescubrimiento()
 
+        // ARRANQUE MINIMO, a proposito.
+        //
+        // Solo el TPMS, que lee un puerto serie y cuesta casi nada. El motor y
+        // la bateria quedan APAGADOS hasta que alguien los encienda por HTTP.
+        //
+        // No es prudencia teorica: este radio se apago TRES veces por calor
+        // con todo corriendo, y la ultima el dueño tuvo que cortarle la
+        // corriente al vehiculo. Pedirle que instale otra version que arranque
+        // sola con todo encendido seria repetir el experimento con su carro.
+        //
+        // Ahora se sube de a una fuente, midiendo /termica entre cada paso.
         arrancarTpms()
-        arrancarBateria()
-        arrancarObd()
-        programarResurreccion()
+        arrancarTermometro()
+        registrarInterruptores()
 
         vivo = true
+        arranco = true
         arrancarRevisionPeriodica()
         Log.i(TAG, "Servicio arriba")
     }
@@ -240,7 +255,14 @@ class DashService : Service() {
      * El dueño reporto tener que abrir la app a mano tras cada reinicio; esto
      * ataca justo eso, sin depender de que el fabricante respete el
      * BOOT_COMPLETED ni de las listas blancas de autoarranque.
+     *
+     * **DESACTIVADA.** Se escribio para ahorrarle al dueño abrir la app tras
+     * cada reinicio, pero si la app es la que cuelga el radio —y lo colgo tres
+     * veces— entonces revivirla cada diez minutos convierte un problema en un
+     * bucle del que el dueño no puede salir sin desinstalar. Vuelve a
+     * activarse cuando haya una sesion larga midiendo temperatura sin cuelgues.
      */
+    @Suppress("unused")
     private fun programarResurreccion() {
         runCatching {
             val am = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
@@ -262,6 +284,52 @@ class DashService : Service() {
             )
             Log.i(TAG, "resurreccion programada cada ${INTERVALO_RESURRECCION_MS / 60000} min")
         }.onFailure { Log.w(TAG, "no se pudo programar la resurreccion: ${it.message}") }
+    }
+
+    /**
+     * Mide la temperatura cada pocos segundos.
+     *
+     * Es un hilo mas, si — pero uno que lee un archivo de texto cada cinco
+     * segundos y duerme. Su costo es despreciable comparado con lo que evita:
+     * el radio se apago DOS veces por calor, y cada vez el dueño se quedo sin
+     * tablero y sin radio en el carro.
+     */
+    private fun arrancarTermometro() {
+        thread(name = "termometro", isDaemon = true) {
+            while (vivo || !arranco) {
+                runCatching { Termometro.medir() }
+                runCatching { Thread.sleep(5_000) }.onFailure { return@thread }
+            }
+        }
+    }
+
+    /** Enciende o apaga el motor y la bateria en caliente, por HTTP. */
+    private fun registrarInterruptores() {
+        EstadoActual.encenderFuente = { cual, encender ->
+            runCatching {
+                when (cual.lowercase()) {
+                    "motor", "obd" -> if (encender) {
+                        if (lectorObd == null) arrancarObd() else "el motor ya estaba encendido"
+                        "motor encendido"
+                    } else {
+                        runCatching { lectorObd?.detener() }
+                        lectorObd = null
+                        EstadoActual.lectorObd = null
+                        "motor apagado"
+                    }
+                    "bateria" -> if (encender) {
+                        if (vigilante == null) arrancarBateria() else "la bateria ya estaba encendida"
+                        "bateria encendida"
+                    } else {
+                        runCatching { vigilante?.detener() }
+                        vigilante = null
+                        EstadoActual.vigilanteBateria = null
+                        "bateria apagada"
+                    }
+                    else -> "fuente desconocida: $cual (usa motor o bateria)"
+                }
+            }.getOrElse { "ERROR: ${it.message}" }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

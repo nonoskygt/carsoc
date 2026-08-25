@@ -109,9 +109,16 @@ class DashView @JvmOverloads constructor(
         programarRepintado()
     }
 
+    /**
+     * El ritmo lo pone el termometro, no una constante.
+     *
+     * Con el radio fresco van 5 cuadros por segundo; tibio, 2; caliente, 1.
+     * Un tablero de vigilancia sigue siendo legible a un cuadro por segundo,
+     * y a esas alturas lo que importa es que el radio no se apague.
+     */
     private fun programarRepintado() {
         removeCallbacks(repintar)
-        postDelayed(repintar, MS_ENTRE_CUADROS)
+        postDelayed(repintar, com.nonosky.s2000dash.Termometro.msEntreCuadros())
     }
 
     override fun onDraw(canvas: Canvas) {

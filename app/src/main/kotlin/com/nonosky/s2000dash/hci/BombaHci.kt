@@ -49,7 +49,7 @@ import kotlin.concurrent.thread
  * Android mata el proceso, y eso tumbaria de golpe el tablero, el TPMS, el
  * puente y el actualizador. Ya paso una vez con el DebugServer.
  */
-class BombaHci(private val hci: HciUsb) {
+class BombaHci(private val hci: CanalUsbHci) {
 
     /**
      * Quien quiera enterarse de lo que llega.
@@ -71,7 +71,24 @@ class BombaHci(private val hci: HciUsb) {
     private val ensamblador = EnsambladorAcl()
 
     /** Trozos ACL ya con credito reservado, listos para salir por el BULK. */
-    private val salida = LinkedBlockingQueue<ByteArray>()
+    /**
+     * Trozos ACL con credito reservado, listos para salir. **Acotada.**
+     *
+     * Sin tope crecia para siempre, y no por un caso raro: cuando un enlace se
+     * cae con envios en vuelo, sus trozos se quedan aqui y nadie los quita —
+     * pero los creditos SI se devuelven, asi que quien envia puede encolar
+     * otros tantos. Cada caida deja basura permanente. Y las caidas son
+     * rutina: el ELM327 clon se cae solo y el BMS se duerme.
+     *
+     * Con tope, lo que sobra se descarta y se CUENTA. Un descarte contado es
+     * un sintoma; una cola creciendo en silencio es una fuga.
+     */
+    private val salida = LinkedBlockingQueue<ByteArray>(TOPE_SALIDA)
+
+    /** Trozos descartados por cola llena. Distinto de cero = algo va mal. */
+    @Volatile
+    var trozosDescartados = 0L
+        private set
 
     /** Lo que hay que repartir. Acotada: la bomba no puede bloquearse aqui. */
     private val reparto = ArrayBlockingQueue<Recibido>(REPARTO_MAX)
@@ -119,6 +136,10 @@ class BombaHci(private val hci: HciUsb) {
 
     @Volatile
     var ultimoFallo: String? = null
+
+    /** Cuantas veces un hilo no murio en su plazo. Debe quedarse en cero. */
+    @Volatile
+    var hilosQueNoMurieron = 0
         private set
 
     private class Peticion(val opcode: Int, val parametros: ByteArray) {
@@ -171,27 +192,127 @@ class BombaHci(private val hci: HciUsb) {
         return true
     }
 
+    /**
+     * Para la bomba y **espera a que sus hilos esten muertos** antes de volver.
+     *
+     * El join no es cortesia: quien llama a esto es RadioBt.soltar(), y lo
+     * siguiente que hace es `hci.cerrar()` — releaseInterface() y close() sobre
+     * el descriptor USB. Sin esperar, ese cierre ocurre MIENTRAS el hilo
+     * `bomba-hci` puede seguir dentro de un bulkTransfer sobre ese mismo
+     * descriptor: uso despues de cerrar, sobre un recurso nativo.
+     *
+     * Y `interrupt()` no salva de eso. La bandera de interrupcion de Java no
+     * la mira nadie dentro del driver USB, asi que a la bomba NO se le
+     * interrumpe —seria inutil— y se le espera. Al hilo de reparto si, porque
+     * ese espera en colas y la interrupcion si lo despierta.
+     *
+     * El plazo es de 2 s: mas que una vuelta entera de la bomba, que en el
+     * peor caso ronda los 250 ms mas el plazo de una escritura.
+     *
+     * Contraste que delata que esto era una omision y no una decision:
+     * BombaEventos.detener() y CanalRfcomm ya hacian su join. La unica que no
+     * esperaba a su hilo era justo la que bombea el dongle — el unico aparato
+     * que se abre y se cierra en ciclos.
+     */
     fun detener() {
         vivo = false
-        runCatching { hiloBomba?.interrupt() }
-        runCatching { hiloReparto?.interrupt() }
+        val b = hiloBomba
+        val r = hiloReparto
         hiloBomba = null
         hiloReparto = null
+        // Llamarse desde el propio hilo de la bomba seria esperarse a si mismo.
+        val yo = Thread.currentThread()
+        runCatching { r?.interrupt() }
+        if (b !== yo) runCatching { b?.join(PLAZO_PARADA_MS) }
+        if (r !== yo) runCatching { r?.join(PLAZO_PARADA_MS) }
+        if (b?.isAlive == true) {
+            Log.w(TAG, "el hilo de la bomba sigue vivo tras ${PLAZO_PARADA_MS} ms; " +
+                "NO se debe cerrar el USB en este estado")
+            hilosQueNoMurieron++
+        }
         // Nadie va a contestar ya: se sueltan los que esperaban una respuesta
         // en vez de dejarlos colgados hasta su plazo.
         enCurso?.listo?.countDown()
         enCurso = null
         salida.clear()
         reparto.clear()
+        // Las entregas por oyente tambien tienen hilo: hay que pararlas, o
+        // sobreviven al detener y siguen llamando a codigo que ya se cerro.
+        entregas.values.forEach { runCatching { it.detener() } }
+        entregas.clear()
     }
 
+    /**
+     * Cada oyente recibe en SU PROPIO hilo, con su propia cola acotada.
+     *
+     * El reparto era en serie: un bucle sobre los oyentes llamandolos uno tras
+     * otro. Bastaba con que uno se bloqueara —por ejemplo esperando credito
+     * ACL, cosa que pasa justo cuando el controlador va saturado y mas trafico
+     * hay— para que se pararan TODOS los demas: las notificaciones del BMS, los
+     * bytes del ELM327 y, lo peor, los avisos de caida de enlace. Todo el mundo
+     * seguia creyendo que su enlace vivia.
+     *
+     * Con un hilo por oyente, el lento solo se ahoga a si mismo. Y su cola
+     * tiene tope: si se llena se descarta y se CUENTA, en vez de crecer hasta
+     * llevarse la memoria.
+     */
     fun suscribir(o: Oyente) {
+        if (entregas.containsKey(o)) return
+        val entrega = Entrega(o)
+        if (entregas.putIfAbsent(o, entrega) != null) return
         oyentes.addIfAbsent(o)
+        entrega.arrancar()
     }
 
     fun quitar(o: Oyente) {
         oyentes.remove(o)
+        entregas.remove(o)?.detener()
     }
+
+    /**
+     * El hilo y la cola de un oyente.
+     *
+     * Se para con su propio `vivo` y se le espera con join, por la misma razon
+     * que a la bomba: un hilo que sobrevive a su detener es un hilo que sigue
+     * tocando cosas que ya se cerraron.
+     */
+    private inner class Entrega(private val oyente: Oyente) {
+        private val cola = java.util.concurrent.ArrayBlockingQueue<Recibido>(TOPE_POR_OYENTE)
+        @Volatile private var vivoEntrega = false
+        private var hilo: Thread? = null
+
+        @Volatile
+        var descartados = 0L
+            private set
+
+        fun arrancar() {
+            vivoEntrega = true
+            hilo = thread(name = "entrega-hci", isDaemon = true) {
+                while (vivoEntrega) {
+                    runCatching {
+                        val r = cola.poll(200, TimeUnit.MILLISECONDS) ?: return@runCatching
+                        entregarA(oyente, r)
+                    }.onFailure { Log.w(TAG, "entrega fallida: ${it.message}") }
+                }
+            }
+        }
+
+        fun ofrecer(r: Recibido) {
+            if (!cola.offer(r)) descartados++
+        }
+
+        fun detener() {
+            vivoEntrega = false
+            val h = hilo
+            hilo = null
+            if (h !== Thread.currentThread()) {
+                runCatching { h?.interrupt() }
+                runCatching { h?.join(PLAZO_PARADA_MS) }
+            }
+        }
+    }
+
+    private val entregas = java.util.concurrent.ConcurrentHashMap<Oyente, Entrega>()
 
     // ------------------------------------------------------------------
     // El bucle
@@ -271,9 +392,15 @@ class BombaHci(private val hci: HciUsb) {
                     val devueltos = flujo.olvidar(handle)
                     ensamblador.olvidar(handle)
                     cerrojosEnvio.remove(handle)
-                    if (devueltos > 0) {
+                    // Purgar lo que quedo encolado de ESE enlace. Si no, sus
+                    // trozos se quedan para siempre ocupando sitio, y ademas
+                    // saldrian por el cable dirigidos a un handle que ya no
+                    // existe — que es basura que el controlador tiene que
+                    // rechazar una por una.
+                    val purgados = purgarSalida(handle)
+                    if (devueltos > 0 || purgados > 0) {
                         Log.i(TAG, "enlace 0x${"%03X".format(handle)} caido: " +
-                            "$devueltos creditos recuperados")
+                            "$devueltos creditos recuperados, $purgados trozos purgados")
                     }
                 }
             }
@@ -320,8 +447,21 @@ class BombaHci(private val hci: HciUsb) {
         }
     }
 
+    /**
+     * Encola para cada oyente y vuelve de inmediato.
+     *
+     * No llama a nadie: solo reparte copias a las colas. Asi el hilo de
+     * reparto nunca se queda dentro del codigo de un oyente.
+     */
     private fun repartir(r: Recibido) {
-        for (o in oyentes) {
+        for (e in entregas.values) {
+            runCatching { e.ofrecer(r) }
+        }
+    }
+
+    /** Lo que antes hacia el bucle de reparto, ahora por oyente y en su hilo. */
+    private fun entregarA(o: Oyente, r: Recibido) {
+        run {
             runCatching {
                 if (r.evento != null) {
                     o.alEvento(r.evento)
@@ -450,7 +590,10 @@ class BombaHci(private val hci: HciUsb) {
                     Log.w(TAG, ultimoFallo!!)
                     return false
                 }
-                salida.offer(t)
+                // offer sobre una cola con tope devuelve false cuando esta
+                // llena: se cuenta y se sigue, en vez de bloquear el hilo que
+                // envia o crecer sin fin.
+                if (!salida.offer(t)) trozosDescartados++
             }
             return true
         } finally {
@@ -551,6 +694,24 @@ class BombaHci(private val hci: HciUsb) {
         reensambla = ReensamblaUsb.paraAcl(flujo.tamPaquete)
     }
 
+    /**
+     * Saca de la cola de salida los trozos de un handle que ya no existe.
+     *
+     * Se vacia y se vuelve a llenar solo con lo que sigue siendo valido: es la
+     * unica forma de borrar del medio de una cola concurrente sin candados
+     * nuevos, y la cola es corta por definicion.
+     */
+    private fun purgarSalida(handle: Int): Int {
+        val rescatados = ArrayList<ByteArray>(TOPE_SALIDA)
+        salida.drainTo(rescatados)
+        var fuera = 0
+        for (t in rescatados) {
+            if (PaqueteAcl.handleDe(t) == handle) fuera++
+            else if (!salida.offer(t)) trozosDescartados++
+        }
+        return fuera
+    }
+
     fun diagnostico(): List<String> = listOf(
         "bomba: ${if (vivo) "viva" else "parada"}",
         "eventos leidos: $eventosLeidos, PDU recibidas: $pdusRecibidas",
@@ -564,6 +725,30 @@ class BombaHci(private val hci: HciUsb) {
     ) + ensamblador.diagnostico() + flujo.diagnostico()
 
     private companion object {
+
+        /**
+         * Cuanto se espera a que un hilo muera. Mayor que una vuelta entera.
+         */
+        const val PLAZO_PARADA_MS = 2_000L
+
+        /**
+         * Tope de la cola de salida.
+         *
+         * Generoso pero finito: el pool de este dongle son 15 buffers, asi que
+         * 256 trozos son mas de diez veces lo que el controlador puede tener
+         * en vuelo. Si se llena, no es congestion: es una fuga.
+         */
+        const val TOPE_SALIDA = 256
+
+        /**
+         * Tope de la cola de cada oyente.
+         *
+         * Un oyente sano vacia su cola en microsegundos. Si llega a 128
+         * pendientes es que se atasco, y lo correcto es descartar y contarlo
+         * antes que crecer sin fin por culpa de uno solo.
+         */
+        const val TOPE_POR_OYENTE = 128
+
         const val TAG = "BombaHci"
 
         /**

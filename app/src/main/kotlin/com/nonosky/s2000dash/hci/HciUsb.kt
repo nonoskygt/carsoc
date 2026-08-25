@@ -33,7 +33,7 @@ import android.util.Log
 class HciUsb(
     private val manager: UsbManager,
     private val device: UsbDevice,
-) {
+) : CanalUsbHci {
 
     private var conexion: UsbDeviceConnection? = null
     private var itf: UsbInterface? = null
@@ -51,10 +51,10 @@ class HciUsb(
     private var aclEntrada: UsbEndpoint? = null
     private var aclSalida: UsbEndpoint? = null
 
-    val abierto: Boolean get() = conexion != null
+    override val abierto: Boolean get() = conexion != null
 
     /** Hay camino de datos, no solo de comandos. */
-    val tieneAcl: Boolean get() = aclEntrada != null && aclSalida != null
+    override val tieneAcl: Boolean get() = aclEntrada != null && aclSalida != null
 
     /**
      * Tamano de bloque del BULK de salida. 64 bytes en este dongle.
@@ -62,9 +62,9 @@ class HciUsb(
      * Lo necesita [PaqueteAcl.maxDatosSeguro] para no mandar nunca una
      * transferencia que sea multiplo exacto de este numero.
      */
-    val tamBloqueSalida: Int get() = aclSalida?.maxPacketSize ?: 64
+    override val tamBloqueSalida: Int get() = aclSalida?.maxPacketSize ?: 64
 
-    val tamBloqueEntrada: Int get() = aclEntrada?.maxPacketSize ?: 64
+    override val tamBloqueEntrada: Int get() = aclEntrada?.maxPacketSize ?: 64
 
     /**
      * Reclama la interfaz HCI del dongle.
@@ -134,7 +134,7 @@ class HciUsb(
      * cuenta creditos**: eso es de capas de mas arriba ([PaqueteAcl.trocear] y
      * [ControlFlujoAcl]). Esta clase es el cable, nada mas.
      */
-    fun escribirAclCrudo(paquete: ByteArray, timeoutMs: Int = TIMEOUT_MS): Int {
+    override fun escribirAclCrudo(paquete: ByteArray, timeoutMs: Int): Int {
         val con = conexion ?: return -1
         val ep = aclSalida ?: return -1
         return con.bulkTransfer(ep, paquete, paquete.size, timeoutMs)
@@ -149,7 +149,7 @@ class HciUsb(
      *
      * Un retorno nulo NO es un error: es lo normal cuando no hay trafico.
      */
-    fun leerAclCrudo(buffer: ByteArray, timeoutMs: Int = TIMEOUT_MS): Int {
+    override fun leerAclCrudo(buffer: ByteArray, timeoutMs: Int): Int {
         val con = conexion ?: return -1
         val ep = aclEntrada ?: return -1
         return con.bulkTransfer(ep, buffer, buffer.size, timeoutMs)
@@ -162,7 +162,7 @@ class HciUsb(
      * tipo de paquete: el tipo lo da el propio endpoint. Por eso aqui va
      * solo opcode y parametros.
      */
-    fun mandarComando(opcode: Int, parametros: ByteArray = ByteArray(0)): Int {
+    override fun mandarComando(opcode: Int, parametros: ByteArray): Int {
         val con = conexion ?: return -1
         val paquete = ByteArray(3 + parametros.size)
         paquete[0] = (opcode and 0xFF).toByte()
@@ -188,7 +188,7 @@ class HciUsb(
      * La cabecera HCI dice cuanto falta: byte 0 el codigo, byte 1 la
      * longitud de los parametros. Se lee hasta completar `2 + longitud`.
      */
-    fun leerEvento(timeoutMs: Int = TIMEOUT_MS): ByteArray? {
+    override fun leerEvento(timeoutMs: Int): ByteArray? {
         val con = conexion ?: return null
         val ep = eventos ?: return null
         val paquete = ep.maxPacketSize.coerceAtLeast(16)
@@ -214,7 +214,7 @@ class HciUsb(
         return acumulado.toByteArray()
     }
 
-    fun cerrar() {
+    override fun cerrar() {
         runCatching {
             itf?.let { conexion?.releaseInterface(it) }
             conexion?.close()
