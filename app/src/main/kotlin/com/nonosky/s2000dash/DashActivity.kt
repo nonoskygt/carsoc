@@ -126,28 +126,20 @@ class DashActivity : ComponentActivity() {
         EstadoActual.buscarAdaptadores = { barrerBloqueando() }
         EstadoActual.emparejarAdaptador = { mac -> emparejarBloqueando(mac) }
         EstadoActual.olvidarAdaptador = { olvidar() }
+        EstadoActual.desvincularAdaptador = { mac -> desvincular(mac) }
         EstadoActual.instalarCompanero = { url, paquete -> instalarCompanero(url, paquete) }
         EstadoActual.armarPin = { pin -> AutoInstaller.armarPin(applicationContext, pin) }
 
         DashService.arrancar(this)
 
-        // Mantener presionado para cambiar de adaptador: la unica
-        // configuracion que existe, escondida donde no estorba al manejar.
-        dashView.setOnLongClickListener {
-            showPicker()
-            true
-        }
+        // El Steren se habla solo por el dongle. Que no quede rastro suyo en
+        // la radio del carro, que sigue haciendo falta para Android Auto.
+        soltarObdDeLaRadio()
 
-        // Un toque simple solo sirve cuando falta configurar algo. Sin esto,
-        // cancelar el selector dejaba la app en "sin enlace" sin ningun
-        // camino de vuelta visible: habia que adivinar lo del pulsado largo.
-        dashView.setOnClickListener {
-            when (EstadoActual.ultimo.connection) {
-                ConnectionState.SinAdaptador -> showPicker()
-                ConnectionState.BluetoothApagado -> startDash()
-                else -> Unit
-            }
-        }
+        // Ya no hay selector de adaptador en pantalla. Abria un barrido y
+        // un createBond de la pila de Android, que es exactamente lo que hay
+        // que mantener lejos del Steren; y un pulsado largo se dispara solo
+        // al manejar. El adaptador se configura por el puente.
 
         ensurePermissions()
     }
@@ -170,13 +162,10 @@ class DashActivity : ComponentActivity() {
 
     override fun onStop() {
         runCatching { unregisterReceiver(bluetoothWatcher) }
-        // Sin esto el sondeo sigue hablandole al adaptador con la app en
-        // segundo plano: gasta bateria del carro y estorba a cualquier otra
-        // app que quiera el mismo ELM327.
-        scheduler?.stop()
-        // Y decirlo: el puente reportaba "Polling" con el sondeo ya parado,
-        // que es peor que no reportar nada.
-        publicarEstado(ConnectionState.Disconnected)
+        // El motor lo lee el servicio por el dongle, no esta pantalla:
+        // irse al fondo ya no para nada ni cambia el estado. Antes aqui se
+        // publicaba Disconnected y el puente reportaba el motor caido
+        // mientras el dongle seguia leyendolo perfectamente.
         super.onStop()
     }
 
@@ -190,11 +179,10 @@ class DashActivity : ComponentActivity() {
         override fun onReceive(context: Context?, intent: android.content.Intent?) {
             if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
             val estado = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)
+            // Las tres fuentes cuelgan del dongle USB, asi que la radio
+            // del carro puede apagarse y encenderse sin afectar al tablero.
+            // Ese interruptor es de Android Auto, no nuestro.
             if (estado == BluetoothAdapter.STATE_ON) startDash()
-            if (estado == BluetoothAdapter.STATE_OFF) {
-                scheduler?.stop()
-                publicarEstado(ConnectionState.BluetoothApagado)
-            }
         }
     }
 
@@ -204,7 +192,6 @@ class DashActivity : ComponentActivity() {
             bluetoothWatcher,
             android.content.IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
         )
-        chosen?.let { beginPolling(it) }
         revisarActualizacionUnaVez()
     }
 
@@ -233,6 +220,7 @@ class DashActivity : ComponentActivity() {
         EstadoActual.buscarAdaptadores = null
         EstadoActual.emparejarAdaptador = null
         EstadoActual.olvidarAdaptador = null
+        EstadoActual.desvincularAdaptador = null
         EstadoActual.instalarCompanero = null
         EstadoActual.armarPin = null
         // Soltar la vista para que no la retenga el servicio. El puente
@@ -275,22 +263,16 @@ class DashActivity : ComponentActivity() {
      * el estado a la vista y se queda escuchando a que lo enciendan.
      */
     private fun startDash() {
-        val adapter = bluetoothAdapter
-        if (adapter == null || !adapter.isEnabled) {
-            publicarEstado(ConnectionState.BluetoothApagado)
-            toast(getString(R.string.enable_bluetooth))
-            return
-        }
-        val saved = savedDevice(adapter)
-        if (saved != null) {
-            chosen = saved
-            beginPolling(saved)
-            return
-        }
-        // Nada elegido todavia. No abrimos el selector a la fuerza: el
-        // tablero lo dice y se abre al tocarlo, para no secuestrar la
-        // pantalla cada vez que arranca el carro.
-        publicarEstado(ConnectionState.SinAdaptador)
+        // El motor entra por el dongle USB: DashService levanta LectorObdHci
+        // y publica en EstadoActual.ultimo. Esta pantalla ya no abre ningun
+        // socket propia.
+        //
+        // Antes si lo hacia, y ese era el defecto: PollScheduler (pila de
+        // Android) y LectorObdHci (dongle) escribian los dos en
+        // EstadoActual.ultimo. El Steren solo le contesta al dongle, asi que
+        // el escritor interno pisaba los datos buenos con Disconnected y el
+        // tablero se quedaba sin motor.
+        dashView.setState(EstadoActual.ultimo)
     }
 
     @SuppressLint("MissingPermission")
@@ -313,8 +295,6 @@ class DashActivity : ComponentActivity() {
             ?: return false
         prefs.edit().putString(KEY_DEVICE, d.address).apply()
         chosen = d
-        // El sondeo tiene que arrancar en el hilo principal.
-        runOnUiThread { beginPolling(d) }
         return true
     }
 
@@ -457,6 +437,60 @@ class DashActivity : ComponentActivity() {
             if (ok) "instalacion lanzada (${destino.length()} bytes)" else "no se pudo lanzar"
         } catch (e: Exception) {
             "error: ${e.message}"
+        }
+    }
+
+    /**
+     * Saca un aparato del Bluetooth del carro, sin apagar la radio.
+     *
+     * `removeBond` no es publico en el SDK, pero existe desde siempre y las
+     * ROMs de estos head units lo traen. Se llama por reflexion; si un dia
+     * no estuviera, se reporta y no se rompe nada.
+     *
+     * Solo se usa contra el Steren. Los telefonos vinculados (Android Auto)
+     * no se tocan nunca.
+     */
+    @SuppressLint("MissingPermission")
+    private fun desvincular(mac: String): String {
+        val a = bluetoothAdapter ?: return "sin adaptador"
+        val objetivo = mac.trim().uppercase()
+        val d = runCatching { a.getRemoteDevice(objetivo) }.getOrNull()
+            ?: return "MAC invalida: $objetivo"
+        if (d.bondState == BluetoothDevice.BOND_NONE) {
+            limpiarRecuerdo(objetivo)
+            return "$objetivo no estaba vinculado"
+        }
+        val r = runCatching {
+            BluetoothDevice::class.java.getMethod("removeBond").invoke(d) as? Boolean
+        }
+        return r.fold(
+            onSuccess = { ok ->
+                limpiarRecuerdo(objetivo)
+                if (ok == true) "$objetivo desvinculado" else "el sistema rechazo desvincular $objetivo"
+            },
+            onFailure = { "no se pudo desvincular $objetivo: ${it.message}" },
+        )
+    }
+
+    /** Si el que se va era el adaptador recordado, olvidarlo tambien. */
+    private fun limpiarRecuerdo(mac: String) {
+        if (prefs.getString(KEY_DEVICE, null)?.uppercase() != mac) return
+        prefs.edit().remove(KEY_DEVICE).apply()
+        chosen = null
+        EstadoActual.adaptadorElegido = null
+    }
+
+    /**
+     * Se asegura de que el Steren no quede vinculado en la radio del carro.
+     *
+     * Se corre al abrir el tablero. Mientras siguiera vinculado, la pila de
+     * Android intentaba tomarlo por su cuenta y peleaba con el dongle por el
+     * mismo ELM327 — y el ELM327 solo atiende a uno.
+     */
+    private fun soltarObdDeLaRadio() {
+        runCatching {
+            val r = desvincular(DashService.MAC_OBD)
+            android.util.Log.i("DashActivity", "OBD fuera de la radio del carro: $r")
         }
     }
 

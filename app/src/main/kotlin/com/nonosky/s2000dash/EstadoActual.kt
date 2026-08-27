@@ -64,6 +64,17 @@ object EstadoActual {
     @Volatile
     var olvidarAdaptador: (() -> Unit)? = null
 
+    /**
+     * Borra el vinculo de un aparato en la pila de Android (`removeBond`).
+     *
+     * El Steren se habla por el dongle USB, no por la radio del carro. Pero
+     * mientras siguiera vinculado ahi, la pila interna intentaba tomarlo — y
+     * dos pilas peleando por el mismo ELM327 es justo lo que dejaba al motor
+     * sin datos. Esto lo saca del Bluetooth del carro sin apagar la radio,
+     * que se sigue necesitando para Android Auto.
+     */
+    var desvincularAdaptador: ((String) -> String)? = null
+
     /** Descarga, verifica la firma e instala un APK acompanante. */
     @Volatile
     var instalarCompanero: ((String, String) -> String)? = null

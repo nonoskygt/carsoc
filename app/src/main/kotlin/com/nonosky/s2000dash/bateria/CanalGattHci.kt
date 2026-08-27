@@ -160,7 +160,13 @@ class CanalGattHci private constructor(
             val st = ConexionLe.interpretarCommandStatus(estado, ConexionLe.CMD_LE_CREATE_CONNECTION)
             traza += "Command Status de la conexion: ${st ?: "sin respuesta"}"
             if (st != 0) {
-                traza += "ERROR: el controlador rechazo la conexion"
+                // Nombrarlo importa. 0x0B es "ACL Connection Already Exists":
+                // el controlador cree que ya hay enlace con esta bateria,
+                // normalmente uno huerfano de un proceso muerto. RadioBt lo
+                // limpia con un HCI Reset al abrir en frio; si aun asi
+                // aparece, el mensaje dice exactamente que buscar.
+                traza += "ERROR: el controlador rechazo la conexion: " +
+                    ConexionLe.nombreEstado(st ?: -1)
                 return null to traza
             }
 

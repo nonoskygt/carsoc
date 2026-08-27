@@ -26,6 +26,21 @@ object RadioBt {
 
     private const val TAG = "RadioBt"
 
+    /** Cuanto se espera el Command Complete del reset. */
+    private const val PLAZO_RESET_MS = 5_000L
+
+    /**
+     * Lo que se le da al controlador para volver en si tras el reset.
+     *
+     * El Command Complete llega antes de que el chip termine: preguntarle por
+     * los pools de buffers en ese hueco devuelve ceros, y un pool en cero es
+     * una capa de datos muerta sin ningun mensaje de error.
+     */
+    private const val REPOSO_TRAS_RESET_MS = 300L
+
+    /** Solo lo tocan las pruebas, para no dormir de verdad. */
+    internal var reposoTrasReset = REPOSO_TRAS_RESET_MS
+
     private val cerrojo = Any()
 
     private var hci: HciUsb? = null
@@ -89,6 +104,12 @@ object RadioBt {
             return null
         }
 
+        // Lo primero que manda cualquier pila Bluetooth, y lo que aqui
+        // faltaba. Va DESPUES de arrancar la bomba (hace falta alguien que
+        // lea el Command Complete) y ANTES de leer los pools, porque el
+        // reset invalida el control de flujo.
+        t += reiniciarControlador(BombeoCompartido(b))
+
         // Los DOS pools: el clasico para el adaptador OBD y el LE para el BMS.
         // Preguntar por los dos importa — un controlador puede no tener pool LE
         // propio y usar el de BR/EDR, y darlo por hecho deja el control de
@@ -107,6 +128,39 @@ object RadioBt {
         traza = t
         Log.i(TAG, "'$quien' abrio la radio")
         return Piezas(h, b, g)
+    }
+
+    /**
+     * Deja el controlador en un estado conocido antes de usarlo.
+     *
+     * Cuando el proceso muere —una actualizacion, un fallo, la ROM matando
+     * servicios— el dongle NO se entera: conserva sus enlaces abiertos porque
+     * nadie le dijo nada. El proceso siguiente reclama la interfaz USB, la
+     * encuentra sana, y al pedir la conexion con la bateria el controlador
+     * contesta 0x0B, `ACL Connection Already Exists`. Y no hay salida: el
+     * enlace viejo es de un proceso que ya no existe, asi que nadie lo va a
+     * cerrar nunca. El tablero se quedaba sin bateria hasta desconectar el
+     * dongle a mano — que es exactamente lo que habia que hacer cada vez.
+     *
+     * `HCI Reset` descarta esos enlaces fantasma. Se manda solo en la
+     * apertura en frio, cuando `usuarios` es cero y por definicion no hay
+     * ningun enlace nuestro que tirar: no puede cortarle el paso ni al motor
+     * ni a la bateria.
+     *
+     * Si fallara, se anota y se sigue. Un reset rechazado es peor diagnostico
+     * que enlaces viejos, pero no es motivo para dejar el tablero a oscuras.
+     */
+    internal fun reiniciarControlador(b: ComandosHci): String {
+        val e = b.ejecutar(HciUsb.CMD_RESET, timeoutMs = PLAZO_RESET_MS)
+            ?: return "RESET: sin respuesta (se sigue de todos modos)"
+        // Command Complete: 0E | largo | num | opcode(2) | estado
+        if (e.size < 6) return "RESET: respuesta corta ${HciUsb.hex(e)}"
+        val estado = e[5].toInt() and 0xFF
+        if (estado != 0) return "RESET: el controlador lo rechazo (estado $estado)"
+        // El controlador tarda en volver en si; preguntarle por los pools
+        // mientras se reinicia devuelve basura o nada.
+        runCatching { Thread.sleep(reposoTrasReset) }
+        return "controlador reiniciado (enlaces viejos descartados)"
     }
 
     /** Suelta una referencia. Cierra de verdad solo cuando no queda nadie. */

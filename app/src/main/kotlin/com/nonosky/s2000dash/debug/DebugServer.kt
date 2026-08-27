@@ -207,6 +207,17 @@ class DebugServer(
                     sendText(out, 200, "application/json",
                         """{"resultado":${org.json.JSONObject.quote(res)}}""")
                 }
+                "/desvincular" -> {
+                    // Saca un aparato del Bluetooth del carro sin apagar la
+                    // radio. Por omision, el Steren: se habla por el dongle y
+                    // no debe quedar vinculado aqui compitiendo.
+                    val mac = consulta["mac"] ?: com.nonosky.s2000dash.DashService.MAC_OBD
+                    val res = runCatching {
+                        EstadoActual.desvincularAdaptador?.invoke(mac)
+                    }.getOrNull() ?: "sin pantalla"
+                    sendText(out, 200, "application/json",
+                        """{"resultado":${org.json.JSONObject.quote(res)}}""")
+                }
                 "/olvidar" -> {
                     runCatching { EstadoActual.olvidarAdaptador?.invoke() }
                     sendText(out, 200, "application/json", """{"olvidado":true}""")
@@ -294,6 +305,15 @@ class DebugServer(
                     sendText(out, 200, "application/json",
                         """{"fijada":${org.json.JSONObject.quote(guardada ?: "")},""" +
                             ""","persistida":${guardada != null}}""")
+                }
+                "/obd-traza" -> {
+                    // Solo mira. A diferencia de /obd-hci, no abre nada ni
+                    // pausa la bateria: devuelve la traza del lector que ya
+                    // esta corriendo. Preguntar no puede costar el enlace.
+                    val l = EstadoActual.lectorObd
+                    val lineas = if (l == null) listOf("el motor esta apagado (/fuente?cual=motor&on=1)")
+                    else listOf("estado: ${EstadoActual.ultimo.connection}") + l.ultimaTraza
+                    sendText(out, 200, "text/plain", lineas.joinToString(SALTO))
                 }
                 "/obd-hci" -> {
                     val mac = consulta["mac"] ?: "00:1D:A5:68:98:8B"

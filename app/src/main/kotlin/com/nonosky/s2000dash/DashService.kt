@@ -419,11 +419,15 @@ class DashService : Service() {
         /**
          * El adaptador OBD, por MAC.
          *
-         * Va fija y no elegida por el usuario porque la pila de Android esta
-         * apagada: ya no hay lista de emparejados que ofrecer. El dongle
-         * pagina esta direccion directamente.
+         * Va fija y no elegida por el usuario: el dongle USB pagina esta
+         * direccion directamente, sin lista de emparejados de por medio.
+         *
+         * Publica porque el tablero tambien la necesita — para asegurarse de
+         * que este aparato NO quede vinculado en la radio del carro. Esa
+         * radio se sigue usando para Android Auto; lo unico que no debe
+         * tocar es el Steren.
          */
-        private const val MAC_OBD = "00:1D:A5:68:98:8B"
+        const val MAC_OBD = "00:1D:A5:68:98:8B"
 
         /** Accion de la alarma que comprueba que el tablero sigue en pie. */
         const val ACCION_RESUCITAR = "com.nonosky.s2000dash.RESUCITAR"

@@ -163,54 +163,42 @@ class EnlaceBrEdr(
     // ------------------------------------------------------------------ etapas
 
     /**
-     * Etapa 0: dejar el controlador en un estado conocido para BR/EDR.
+     * Etapa 0: ajustar el controlador para BR/EDR.
      *
-     * Se hace UNA vez por apertura del dongle. `HCI_Reset` borra la
-     * configuracion, asi que todo lo demas va detras, nunca delante.
+     * **Aqui NO se resetea.** Lo hacia, y era un error grave desde que la
+     * radio se comparte:
+     *
+     *   - `HCI_Reset` borra el estado de control de flujo del controlador,
+     *     pero el [ControlFlujoAcl] de la bomba —que es COMPARTIDO— se queda
+     *     con sus contadores de antes. A partir de ahi creemos tener creditos
+     *     que el controlador ya no reconoce, y los paquetes salientes se caen
+     *     **en silencio**. El sintoma enganaba entero: el enlace BR/EDR se
+     *     abria, el L2CAP se abria, el RFCOMM se abria... y luego ni un `ATI`
+     *     recibia respuesta, porque el `ATI` nunca llego a salir.
+     *   - Y tira TODOS los enlaces del controlador, incluido el LE de la
+     *     bateria. Cada reintento del motor dejaba la bateria muda hasta que
+     *     el vigilante volviera a entrar, treinta segundos despues.
+     *
+     * El reset va donde le toca: en [RadioBt], una sola vez por apertura en
+     * frio del dongle, antes de que exista ningun enlace ni ningun contador.
      */
     fun preparar(): Boolean {
-        var ok = true
-
-        // Reset primero: borra mascaras y modos anteriores.
-        val r = cmd.ejecutar(HciUsb.CMD_RESET, timeoutMs = 3_000)
-        anotar("RESET -> ${resumen(r)}")
-        if (r == null || CanalComandos.estadoDe(r) != 0) ok = false
-
-        // La mascara de eventos ANTES de nada: sin ella los eventos del
-        // emparejamiento seguro (bits 48..53) no existen para nosotros.
-        val m = cmd.ejecutar(HciBrEdr.CMD_SET_EVENT_MASK, HciBrEdr.MASCARA_EVENTOS)
-        anotar("SET_EVENT_MASK -> ${resumen(m)}")
-        if (m == null || CanalComandos.estadoDe(m) != 0) {
-            // No es fatal: el barrido BLE ya funcionaba con la mascara por
-            // defecto. Pero si esto falla, el emparejamiento seguro no va a
-            // funcionar y conviene que quede escrito ANTES de perder una hora.
-            anotar("  AVISO: sin mascara de eventos, el SSP no dara senales de vida")
-        }
-
-        val p = cmd.ejecutar(HciBrEdr.CMD_WRITE_PAGE_TIMEOUT, HciBrEdr.pageTimeout())
-        anotar("WRITE_PAGE_TIMEOUT (10.24 s) -> ${resumen(p)}")
-
-        val s = cmd.ejecutar(
-            HciBrEdr.CMD_WRITE_SIMPLE_PAIRING_MODE,
-            byteArrayOf(if (usarSsp) 0x01 else 0x00),
-        )
-        anotar("WRITE_SIMPLE_PAIRING_MODE(${if (usarSsp) 1 else 0}) -> ${resumen(s)}")
-
-        val b = cmd.ejecutar(HciBrEdr.CMD_READ_BUFFER_SIZE)
-        if (b != null && CanalComandos.estadoDe(b) == 0) {
-            val q = CanalComandos.retornoDe(b)
-            if (q.size >= 7) {
-                val maxAcl = ((q[1].toInt() and 0xFF) shl 8) or (q[0].toInt() and 0xFF)
-                val numAcl = ((q[6].toInt() and 0xFF) shl 8) or (q[5].toInt() and 0xFF)
-                bufferAcl = maxAcl
-                creditosAcl = numAcl
-                anotar("READ_BUFFER_SIZE -> paquete ACL $maxAcl bytes, $numAcl buffers")
-            }
-        } else {
-            anotar("READ_BUFFER_SIZE -> ${resumen(b)}")
-        }
-        return ok
+        val r = preparacion(cmd, usarSsp, ::anotar)
+        bufferAcl = r.bufferAcl
+        creditosAcl = r.creditosAcl
+        return r.ok
     }
+
+    /**
+     * El cuerpo de [preparar], sin depender de la instancia.
+     *
+     * Separado para poder probarlo en la JVM: [EnlaceBrEdr] recibe un
+     * [HciUsb] concreto, que necesita el `UsbManager` de Android y no se
+     * puede construir aqui. Lo que hay que dejar clavado —que esta secuencia
+     * NO manda `HCI_Reset`— vive en esta funcion.
+     */
+    internal class Preparacion(val ok: Boolean, val bufferAcl: Int, val creditosAcl: Int)
+
 
     /** Tamano maximo de un paquete ACL de BR/EDR. Lo necesita la capa ACL. */
     @Volatile
@@ -538,10 +526,61 @@ class EnlaceBrEdr(
         traza.add(t)
     }
 
-    private fun resumen(e: ByteArray?): String =
-        if (e == null) "SIN RESPUESTA" else HciBrEdr.motivo(CanalComandos.estadoDe(e))
-
-    private companion object {
+    internal companion object {
         const val TAG = "EnlaceBrEdr"
+
+        internal fun resumen(e: ByteArray?): String =
+            if (e == null) "SIN RESPUESTA" else HciBrEdr.motivo(CanalComandos.estadoDe(e))
+
+        internal fun preparacion(
+            cmd: ComandosHci,
+            usarSsp: Boolean,
+            anotar: (String) -> Unit,
+        ): Preparacion {
+            var ok = true
+            var bufferAcl = 0
+            var creditosAcl = 0
+
+            // La mascara de eventos ANTES de nada: sin ella los eventos del
+            // emparejamiento seguro (bits 48..53) no existen para nosotros.
+            val m = cmd.ejecutar(HciBrEdr.CMD_SET_EVENT_MASK, HciBrEdr.MASCARA_EVENTOS)
+            anotar("SET_EVENT_MASK -> ${resumen(m)}")
+            if (m == null || CanalComandos.estadoDe(m) != 0) {
+                // No es fatal: el barrido BLE ya funcionaba con la mascara por
+                // defecto. Pero si esto falla, el emparejamiento seguro no va a
+                // funcionar y conviene que quede escrito ANTES de perder una hora.
+                anotar("  AVISO: sin mascara de eventos, el SSP no dara senales de vida")
+            }
+
+            val p = cmd.ejecutar(HciBrEdr.CMD_WRITE_PAGE_TIMEOUT, HciBrEdr.pageTimeout())
+            anotar("WRITE_PAGE_TIMEOUT (10.24 s) -> ${resumen(p)}")
+
+            val s = cmd.ejecutar(
+                HciBrEdr.CMD_WRITE_SIMPLE_PAIRING_MODE,
+                byteArrayOf(if (usarSsp) 0x01 else 0x00),
+            )
+            anotar("WRITE_SIMPLE_PAIRING_MODE(${if (usarSsp) 1 else 0}) -> ${resumen(s)}")
+
+            val b = cmd.ejecutar(HciBrEdr.CMD_READ_BUFFER_SIZE)
+            if (b != null && CanalComandos.estadoDe(b) == 0) {
+                val q = CanalComandos.retornoDe(b)
+                if (q.size >= 7) {
+                    val maxAcl = ((q[1].toInt() and 0xFF) shl 8) or (q[0].toInt() and 0xFF)
+                    // Read_Buffer_Size devuelve, tras el estado:
+                    //   acl(2) | sco(1) | numAcl(2) | numSco(2)
+                    // o sea numAcl en 3..4. Se leia en 5..6, que es numSco: este
+                    // dongle declara 1 buffer SCO y la traza reportaba "1 buffers"
+                    // teniendo 8. Nadie consume el valor todavia, pero una traza
+                    // que miente cuesta horas cuando algo si depende de ella.
+                    val numAcl = ((q[4].toInt() and 0xFF) shl 8) or (q[3].toInt() and 0xFF)
+                    bufferAcl = maxAcl
+                    creditosAcl = numAcl
+                    anotar("READ_BUFFER_SIZE -> paquete ACL $maxAcl bytes, $numAcl buffers")
+                }
+            } else {
+                anotar("READ_BUFFER_SIZE -> ${resumen(b)}")
+            }
+            return Preparacion(ok, bufferAcl, creditosAcl)
+        }
     }
 }
