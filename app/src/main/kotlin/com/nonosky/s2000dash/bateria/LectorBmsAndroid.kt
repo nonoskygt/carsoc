@@ -116,6 +116,25 @@ object LectorBmsAndroid {
                         // `onServicesDiscovered` no llegaba en 12 s. El
                         // volcado GATT que si funciona lo hace exactamente
                         // asi, y no habia razon para separarse de el.
+                        // LIMPIAR LA CACHE ANTES DE DESCUBRIR.
+                        //
+                        // Android guarda la tabla de servicios y handles por
+                        // aparato, entre reinicios de la app incluso. Si esa
+                        // copia esta rancia, `writeDescriptor` escribe contra
+                        // un handle que ya no es el del CCCD, contesta
+                        // status=0 tan contento, y las notificaciones no
+                        // llegan nunca. Es exactamente el sintoma que se
+                        // midio: escrituras con acuse correcto y cero
+                        // notificaciones, mientras el mismo BMS leido por el
+                        // dongle daba 13,09 V sin despeinarse.
+                        //
+                        // `refresh()` es API oculta y no hay alternativa
+                        // publica. Si un dia desaparece, se sigue sin ella.
+                        runCatching {
+                            val ok = g.javaClass.getMethod("refresh").invoke(g) as? Boolean
+                            traza += "cache GATT limpiada: $ok"
+                        }.onFailure { traza += "no se pudo limpiar la cache: ${it.message}" }
+
                         if (!g.discoverServices()) {
                             traza += "discoverServices devolvio false"
                             descubierto.countDown()

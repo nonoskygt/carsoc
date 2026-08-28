@@ -146,7 +146,11 @@ class DashService : Service() {
         EstadoActual.leerBmsAhora = { mac ->
             // Con sondas: esta ruta es para depurar, y ahi si compensa pagar
             // el atasco de cola a cambio de saber si el aparato contesta algo.
-            val lectura = LectorBmsAndroid.leer(ctx, radioInterna, mac, sondas = true)
+            val lectura = LectorBmsAndroid.leer(ctx, radioInterna, mac)
+                // Sin sondas: se midio que una lectura de 2a00 que no
+                // contesta deja la operacion en vuelo y la cola de GATT
+                // rechaza las peticiones que vienen detras. La sonda impedia
+                // ver si el resto funcionaba.
             lectura.traza + lectura.problemas +
                 listOfNotNull(
                     lectura.basico?.let { "BASICO: $it" },
@@ -295,7 +299,7 @@ class DashService : Service() {
             v.arrancar()
 
             EstadoActual.leerBmsAhora = { mac ->
-                val lectura = LectorBmsAndroid.leer(ctx, radioInterna, mac)
+                val lectura = LectorBmsAndroid.leer(ctx, radioInterna, mac, sondas = true)
                 lectura.traza + lectura.problemas +
                     listOfNotNull(
                         lectura.basico?.let { "BASICO: $it" },
