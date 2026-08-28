@@ -19,6 +19,56 @@ class ConfirmarInstalacionService : AccessibilityService() {
         instancia = this
         Log.i(TAG, "Confirmador conectado")
         reportar("confirmador CONECTADO y listo para mandos")
+        levantarElTablero()
+    }
+
+    /**
+     * Enciende el tablero al arrancar el carro.
+     *
+     * ## Por que lo hace ESTE modulo y no el BootReceiver del tablero
+     *
+     * Se midio con un reinicio de verdad: tras arrancar, el confirmador
+     * aparecio en el log —"Start proc ... for service
+     * ConfirmarInstalacionService"— y el `BootReceiver` del tablero NO
+     * aparecio por ningun lado, mientras otras apps del fabricante si
+     * recibian el suyo. Esta ROM tiene lista blanca de autoarranque y el
+     * tablero no esta en ella; el `BOOT_COMPLETED` sencillamente no le llega.
+     * Se probo tambien con `QUICKBOOT_POWERON` y tampoco.
+     *
+     * Pero un **servicio de accesibilidad** lo arranca Android por su cuenta
+     * en cada arranque, antes que cualquier lista del fabricante, porque el
+     * sistema tiene que garantizar que quien depende de accesibilidad para
+     * usar el aparato pueda usarlo. Es el unico componente de este proyecto
+     * que la ROM no puede ignorar — y ya estaba instalado.
+     *
+     * Asi que el confirmador, que nacio para pulsar "Instalar", hereda un
+     * segundo trabajo: encender el tablero. Cuesta un intent y resuelve algo
+     * que el dueño pidio explicitamente — que la app este SIEMPRE al girar la
+     * llave, y que cerrarla sea decision suya y no del fabricante.
+     *
+     * Nunca lanza: si la ROM bloquea abrir pantallas desde segundo plano, se
+     * queda al menos el servicio, que es el que sostiene el TPMS y la alerta
+     * de presion baja.
+     */
+    private fun levantarElTablero() {
+        runCatching {
+            val servicio = android.content.Intent()
+                .setClassName(PAQUETE_TABLERO, "$PAQUETE_TABLERO.DashService")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(servicio)
+            } else {
+                startService(servicio)
+            }
+            reportar("tablero: servicio levantado desde el confirmador")
+        }.onFailure { reportar("tablero: no se pudo levantar el servicio: ${it.message}") }
+
+        runCatching {
+            startActivity(
+                android.content.Intent()
+                    .setClassName(PAQUETE_TABLERO, "$PAQUETE_TABLERO.DashActivity")
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { reportar("tablero: no se pudo abrir la pantalla: ${it.message}") }
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
@@ -283,6 +333,9 @@ class ConfirmarInstalacionService : AccessibilityService() {
     companion object {
 
         private const val TAG = "Confirmador"
+
+        /** El tablero al que este modulo sirve. */
+        private const val PAQUETE_TABLERO = "com.nonosky.s2000dash"
 
         /**
          * El servicio vivo, para que la difusion del mando pueda actuar.

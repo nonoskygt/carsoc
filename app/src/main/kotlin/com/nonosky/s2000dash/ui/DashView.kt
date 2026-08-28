@@ -301,8 +301,57 @@ class DashView @JvmOverloads constructor(
         labelPaint.color = color
         canvas.drawText(texto, w * 0.5f, h * 0.985f, labelPaint)
 
-        dibujarAjusteCombustible(canvas, w, h)
+        // El AJUSTE ya no se pinta aparte: MEZCLA muestra la suma de los dos
+        // y repetir el desglose debajo era decir dos veces lo mismo. El corto
+        // y el largo por separado siguen estando en /state para cuando haya
+        // que diagnosticar de verdad, que es cuando esa distincion importa.
+        dibujarVtec(canvas, w, h)
         dibujarEstadoEnlaces(canvas, w, h)
+    }
+
+    /** Hasta cuando se sigue pintando el VTEC despues de soltarlo. */
+    private var vtecHastaMs = 0L
+
+    /**
+     * El VTEC, abajo a la izquierda. Solo aparece cuando engancha.
+     *
+     * ## Es una DEDUCCION, no una señal
+     *
+     * OBD-II generico no expone el solenoide del VTEC: no hay PID que lo
+     * diga, ni en este carro ni en ninguno. Lo que hay es lo que lo provoca —
+     * revoluciones por encima del cruce y pedal suficiente— asi que se deduce
+     * de rpm >= 5850 y carga >= 60%. Honda publica ese cruce para el AP1; el
+     * 60% de carga es la guarda que evita cantar VTEC en retencion, cuando
+     * las revoluciones estan arriba pero el motor no esta empujando.
+     *
+     * Estuvo DOBLEMENTE muerto hasta hoy: nunca se pinto en pantalla, y
+     * ademas `loadPct` salia siempre null porque esta ECU contesta el 0104
+     * sin el byte del PID. Arreglado eso, la deduccion por fin puede darse.
+     *
+     * ## Por que se queda encendido un momento
+     *
+     * El VTEC engancha en un pico y se suelta al cambiar de marcha. Con el
+     * radio caliente el tablero repinta a un cuadro por segundo, asi que un
+     * enganche corto caeria entre dos cuadros y no se veria nunca. Se
+     * sostiene [MS_VTEC_VISIBLE] tras soltarlo: lo justo para que el ojo lo
+     * cace sin mentir sobre cuanto duro.
+     *
+     * Se exige ademas que la carga NO sea rancia. Se lee seis veces por
+     * periodo y las revoluciones sesenta, asi que al pisar a fondo es muy
+     * facil tener rpm de ahora con una carga de hace un segundo — y cantar un
+     * VTEC con datos de dos momentos distintos es inventarlo.
+     */
+    private fun dibujarVtec(canvas: Canvas, w: Float, h: Float) {
+        val ahora = System.currentTimeMillis()
+        val cargaFresca = !state.isStale(state.loadAtMs, ahora)
+        if (state.vtecActive && cargaFresca) vtecHastaMs = ahora + MS_VTEC_VISIBLE
+        if (ahora > vtecHastaMs) return
+
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = h * 0.075f
+        textPaint.color = COLOR_VTEC_ON
+        canvas.drawText("VTEC", w * 0.012f, h * 0.985f, textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
     }
 
     /**
@@ -356,42 +405,6 @@ class DashView @JvmOverloads constructor(
         labelPaint.textAlign = Paint.Align.CENTER
     }
 
-    /**
-     * Los dos ajustes de combustible, abajo a la izquierda.
-     *
-     * Es el dato mas valioso que da esta ECU y el que nadie mira, porque
-     * delata la averia ANTES de que encienda la luz: una fuga de vacio o un
-     * inyector sucio empujan la correccion arriba mucho antes de que la
-     * centralita se rinda y guarde un codigo.
-     *
-     * Se pintan los DOS —corto y largo— y no su suma, porque dicen cosas
-     * distintas: el corto es lo que la sonda esta corrigiendo ahora mismo y
-     * oscila; el largo es lo que la centralita ya dio por aprendido. Un
-     * largo grande con un corto tranquilo es un problema viejo y asentado.
-     *
-     * Cero es perfecto. Se pinta tranquilo hasta el 10%, ambar hasta el 25 y
-     * rojo por encima, que es donde la centralita se queda sin margen.
-     */
-    private fun dibujarAjusteCombustible(canvas: Canvas, w: Float, h: Float) {
-        val corto = state.trimCortoPct
-        val largo = state.trimLargoPct
-        if (corto == null && largo == null) return
-
-        labelPaint.textAlign = Paint.Align.LEFT
-        labelPaint.textSize = h * 0.040f
-        labelPaint.color = colorTrim(maxOf(kotlin.math.abs(corto ?: 0), kotlin.math.abs(largo ?: 0)))
-        val c = corto?.let { "%+d".format(it) } ?: "--"
-        val l = largo?.let { "%+d".format(it) } ?: "--"
-        canvas.drawText("AJUSTE  $c / $l %", w * 0.012f, h * 0.985f, labelPaint)
-        labelPaint.textAlign = Paint.Align.CENTER
-    }
-
-    /** Hasta 10% es normal; 25% es el limite practico de la centralita. */
-    private fun colorTrim(magnitud: Int): Int = when {
-        magnitud >= 25 -> COLOR_REDLINE
-        magnitud >= 10 -> COLOR_AMBER
-        else -> COLOR_TEXT_DIM
-    }
 
     // --- Llantas ------------------------------------------------------------
 
@@ -406,33 +419,34 @@ class DashView @JvmOverloads constructor(
     private fun dibujarLlantas(
         canvas: Canvas, left: Float, ancho: Float, h: Float, ahora: Long, top: Float,
     ) {
-        labelPaint.textAlign = Paint.Align.CENTER
-        labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = h * 0.048f
-        canvas.drawText(tituloLlantas(ahora), left + ancho * 0.5f, top + h * 0.055f, labelPaint)
-
-        // Silueta del carro: un rectangulo redondeado tenue detras de las
-        // cuatro cajas. No decora — es lo que dice que arriba es adelante.
-        val margenX = ancho * 0.13f
-        val topRejilla = top + h * 0.085f
+        // SIN TITULO y SIN "ADELANTE".
+        //
+        // Los quito el dueño, y tiene razon: eran texto fijo ocupando el
+        // sitio de los numeros. Que arriba es adelante lo dice la silueta, y
+        // que la caja de arriba a la izquierda es la delantera izquierda lo
+        // dice su posicion — que es el argumento con el que se diseño esta
+        // rejilla desde el principio. El estado del receptor vive ahora en la
+        // linea de abajo, con el de los otros dos enlaces.
+        //
+        // Lo que se gana con ese espacio son cajas MAS GRANDES, que es lo
+        // unico que se mira de reojo manejando.
+        // La silueta se ensancha para ENMARCAR las cajas nuevas. Con el
+        // margen viejo las cajas grandes se le salian por los lados y el
+        // contorno asomaba por detras, que se leia como un fallo de pintado.
+        val margenX = ancho * 0.02f
+        val topRejilla = top + h * 0.03f
         val altoRejilla = h * 0.93f - topRejilla
         caja.set(left + margenX, topRejilla, left + ancho - margenX, topRejilla + altoRejilla)
         trazoPaint.color = COLOR_SILUETA
         trazoPaint.strokeWidth = h * 0.006f
         canvas.drawRoundRect(caja, ancho * 0.10f, ancho * 0.10f, trazoPaint)
 
-        // "ADELANTE" arriba: sin esto, un tablero de cuatro numeros no dice
-        // por si solo cual esquina es cual.
-        labelPaint.textSize = h * 0.036f
-        labelPaint.color = COLOR_SILUETA_TEXTO
-        canvas.drawText("ADELANTE", left + ancho * 0.5f, topRejilla + h * 0.045f, labelPaint)
-
-        val anchoCelda = ancho * 0.36f
-        val altoCelda = altoRejilla * 0.36f
-        val xIzq = left + ancho * 0.30f
-        val xDer = left + ancho * 0.70f
-        val yArriba = topRejilla + altoRejilla * 0.33f
-        val yAbajo = topRejilla + altoRejilla * 0.76f
+        val anchoCelda = ancho * 0.42f
+        val altoCelda = altoRejilla * 0.44f
+        val xIzq = left + ancho * 0.28f
+        val xDer = left + ancho * 0.72f
+        val yArriba = topRejilla + altoRejilla * 0.26f
+        val yAbajo = topRejilla + altoRejilla * 0.74f
 
         dibujarRueda(canvas, Rueda.DelanteraIzquierda, xIzq, yArriba, anchoCelda, altoCelda, ahora)
         dibujarRueda(canvas, Rueda.DelanteraDerecha, xDer, yArriba, anchoCelda, altoCelda, ahora)
@@ -502,22 +516,35 @@ class DashView @JvmOverloads constructor(
         trazoPaint.strokeWidth = alto * 0.035f
         canvas.drawRoundRect(caja, alto * 0.18f, alto * 0.18f, trazoPaint)
 
-        // Etiqueta de la esquina, discreta: la posicion ya lo dice, esto solo
-        // confirma para quien mira por primera vez.
-        labelPaint.textAlign = Paint.Align.LEFT
-        labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = alto * 0.20f
-        canvas.drawText(rueda.corta, caja.left + ancho * 0.06f, caja.top + alto * 0.26f, labelPaint)
-        labelPaint.textAlign = Paint.Align.CENTER
-
+        // DOS valores, del MISMO tamaño, con sus unidades. Nada mas.
+        //
+        // Antes esta caja llevaba la etiqueta de la esquina (DI/DD/TI/TD), la
+        // presion grande y un pie de texto explicando por que faltaba el
+        // dato. El dueño lo dejo claro: fuera los textos, los dos numeros
+        // igual de grandes, y con C y PSI para saber cual es cual.
+        //
+        // La temperatura no es decoracion: una llanta que se calienta mas que
+        // sus tres hermanas esta rozando, arrastrando un freno o perdiendo
+        // aire — y eso se ve antes en los grados que en la presion.
+        val tam = alto * 0.30f
+        textPaint.textSize = tam
         textPaint.color = color
-        textPaint.textSize = alto * 0.50f
-        val texto = psi?.let { String.format("%.0f", it) } ?: "--"
-        canvas.drawText(texto, cx, cy + alto * 0.16f, textPaint)
+        canvas.drawText(
+            psi?.let { String.format("%.0f PSI", it) } ?: "-- PSI",
+            cx, cy - alto * 0.03f, textPaint,
+        )
 
-        labelPaint.color = if (rancia) COLOR_STALE else COLOR_TEXT_DIM
-        labelPaint.textSize = alto * 0.16f
-        canvas.drawText(pieDeRueda(lectura, rancia, ahora), cx, caja.bottom - alto * 0.09f, labelPaint)
+        val tempC = lectura?.temperaturaC
+        textPaint.color = when {
+            tempC == null || rancia -> COLOR_STALE
+            tempC >= 80 -> COLOR_REDLINE
+            tempC >= 65 -> COLOR_AMBER
+            else -> COLOR_TEXT
+        }
+        canvas.drawText(
+            tempC?.let { "$it C" } ?: "-- C",
+            cx, cy + alto * 0.32f, textPaint,
+        )
     }
 
     /**
@@ -709,25 +736,15 @@ class DashView @JvmOverloads constructor(
         labelPaint.textSize = h * 0.055f
         canvas.drawText("ADMISION", left + ancho * 0.5f, h * 0.10f, labelPaint)
 
-        // MAP con barra: en un atmosferico es un vacuometro, y lo que se mira
-        // ahi es la TENDENCIA —cuanto esta pidiendo el motor— no la cifra.
+        // Sin barra. La llevaba porque en un atmosferico el MAP es un
+        // vacuometro y se penso que importaba la tendencia, pero el numero ya
+        // dice lo mismo y la barra solo metia una cosa mas moviendose. La
+        // quito el dueño.
         val map = state.mapKpa
         val mapStale = state.isStale(state.mapAtMs, ahora)
         filaGrande(canvas, x0, x1, h * 0.30f, h, "COLECTOR",
             map?.let { "$it kPa" } ?: "-- kPa",
             if (mapStale) COLOR_STALE else COLOR_TEXT)
-
-        val barTop = h * 0.345f
-        val barH = h * 0.045f
-        barPaint.color = COLOR_CAJA
-        canvas.drawRoundRect(x0, barTop, x1, barTop + barH, barH / 2, barH / 2, barPaint)
-        if (map != null) {
-            // De 20 a 105 kPa: por debajo es vacio de retencion y por encima
-            // ya no sube un atmosferico. Mas rango solo aplastaria la escala.
-            val t = ((map - 20f) / 85f).coerceIn(0f, 1f)
-            barPaint.color = if (mapStale) COLOR_STALE else COLOR_GREEN
-            canvas.drawRoundRect(x0, barTop, x0 + (x1 - x0) * t, barTop + barH, barH / 2, barH / 2, barPaint)
-        }
 
         val ace = state.aceleradorPct
         filaGrande(canvas, x0, x1, h * 0.55f, h, "ACELERADOR",
@@ -791,17 +808,26 @@ class DashView @JvmOverloads constructor(
             state.iatC?.let { "$it °C" } ?: "-- °C",
             if (state.isStale(state.iatAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
 
-        // MEZCLA desde la sonda que el carro SI expone.
+        // MEZCLA como PORCENTAJE REAL, no como palabra.
         //
-        // Se pedia el AFR de banda ancha (PID 0134) y siempre salia vacio: el
-        // mapa de PIDs de esta ECU dice que no soporta nada por encima del
-        // 0x20. Lo que si hay es el voltaje de la sonda (0114), que es de
-        // banda estrecha y **no da un AFR**: solo de que lado de la
-        // estequiometrica esta. Se muestra como RICA/POBRE, que es lo que esa
-        // señal puede decir de verdad — poner un numero seria inventarlo.
-        val o2 = state.o2Voltaje
+        // Y el numero NO sale de la sonda. La sonda de este carro es de banda
+        // estrecha (0114): un voltaje que solo dice de que lado de la
+        // estequiometrica esta, y sacarle un porcentaje seria inventarlo. El
+        // AFR de banda ancha (0134) no existe aqui — el mapa de PIDs de esta
+        // ECU se corta en el 0x20.
+        //
+        // Lo que SI es un porcentaje real y medido es la suma de los dos
+        // ajustes de combustible: cuanto esta corrigiendo la centralita sobre
+        // la inyeccion base para mantener la mezcla donde quiere. Cero es
+        // perfecto. POSITIVO significa que mete gasolina de mas porque lee
+        // POBRE; negativo, que la quita porque lee RICA.
+        //
+        // Es el mismo dato que usa cualquier taller para diagnosticar mezcla,
+        // y a diferencia del voltaje de la sonda tiene unidades honestas.
+        val mezcla = totalAjuste()
         filaGrande(canvas, x0, x1, h * 0.74f, h, "MEZCLA",
-            textoMezcla(o2), colorO2(o2, state.isStale(state.o2AtMs, ahora)))
+            mezcla?.let { "%+d %%".format(it) } ?: "-- %",
+            colorMezcla(mezcla, state.isStale(state.trimCortoAtMs, ahora)))
 
         // El voltaje del puerto OBD es el del sistema con el motor en marcha,
         // o sea lo que da el ALTERNADOR. Se llama por su nombre para que no se
@@ -819,11 +845,38 @@ class DashView @JvmOverloads constructor(
      * lo unico honesto que se puede decir es de que lado esta, y si esta
      * oscilando, que es lo que se quiere ver.
      */
-    private fun textoMezcla(v: Float?): String = when {
-        v == null -> "--"
-        v >= 0.60f -> "RICA"
-        v <= 0.30f -> "POBRE"
-        else -> "OK"
+    /**
+     * La correccion total de mezcla: corto mas largo, en por ciento.
+     *
+     * Se suman porque lo que importa para juzgar la mezcla es cuanto se esta
+     * desviando la centralita EN TOTAL de su inyeccion base. Que la
+     * correccion venga de la parte que oscila o de la ya aprendida es una
+     * distincion util para diagnosticar, y por eso las dos siguen viendose
+     * por separado abajo — pero no para mirar de reojo si el motor va bien.
+     */
+    private fun totalAjuste(): Int? {
+        val c = state.trimCortoPct
+        val l = state.trimLargoPct
+        if (c == null && l == null) return null
+        return (c ?: 0) + (l ?: 0)
+    }
+
+    /**
+     * Rojo POBRE, verde bien, ambar RICA — como lo pidio el dueño.
+     *
+     * El corte esta en +-10%, que es donde cualquier taller empieza a mirar,
+     * y en +-25% se pone mas fuerte porque ahi la centralita se esta quedando
+     * sin margen de correccion y la luz de averia esta cerca.
+     *
+     * Pobre es el lado peligroso y por eso se lleva el rojo: una mezcla pobre
+     * sube la temperatura de combustion. Rica ensucia y gasta, pero no funde
+     * nada — de ahi el ambar.
+     */
+    private fun colorMezcla(total: Int?, stale: Boolean): Int = when {
+        total == null || stale -> COLOR_STALE
+        total >= 10 -> COLOR_REDLINE      // pobre: la ECU mete gasolina de mas
+        total <= -10 -> COLOR_AMBER       // rica: la ECU esta quitando
+        else -> COLOR_GREEN
     }
 
     private fun colorO2(v: Float?, stale: Boolean): Int = when {
@@ -950,6 +1003,9 @@ class DashView @JvmOverloads constructor(
 
         /** Lo que hay que sostener la X para que el tablero se cierre. */
         const val MS_PULSACION_LARGA = 600L
+
+        /** Cuanto se sostiene el aviso de VTEC tras soltarlo. */
+        const val MS_VTEC_VISIBLE = 2_000L
 
         /**
          * 200 ms entre cuadros: 5 por segundo.

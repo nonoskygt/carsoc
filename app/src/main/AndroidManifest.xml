@@ -99,6 +99,18 @@
             <intent-filter android:priority="900">
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <!--
+                  QUICKBOOT_POWERON no es de AOSP: lo emiten muchas ROMs
+                  chinas —esta incluida— cuando el aparato sale de su
+                  hibernacion rapida en vez de arrancar de cero. En un head
+                  unit eso es LO NORMAL: el SoC nunca se apaga del todo
+                  porque cuelga del 12 V constante, asi que al girar la llave
+                  a menudo NO hay BOOT_COMPLETED que valga. Sin esta accion
+                  el tablero no aparecia unas veces si y otras no, que es
+                  justo lo que reporto el dueño.
+                -->
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
             <intent-filter>
                 <!-- Tras actualizarse a si misma, el sistema mata el proceso

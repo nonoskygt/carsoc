@@ -305,9 +305,105 @@ class DashService : Service() {
             val lector = TpmsReader(applicationContext)
             lectorTpms = lector
             EstadoActual.lectorTpms = lector
-            lector.alCambiar = { runCatching { EstadoActual.alCambiarTpms?.invoke() } }
+            lector.alCambiar = {
+                runCatching { EstadoActual.alCambiarTpms?.invoke() }
+                runCatching { revisarPresiones() }
+            }
             lector.arrancar()
         }.onFailure { Log.w(TAG, "TPMS no arranco: ${it.message}") }
+    }
+
+    /** Ruedas que ya estan avisadas, para no repetir la alerta. */
+    private val ruedasAvisadas = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /**
+     * Vigila la presion y avisa aunque el tablero este cerrado.
+     *
+     * Esta es la razon de que el servicio siga vivo al cerrar la pantalla. El
+     * TPMS va por USB, no gasta radio, y es lo unico de todo el tablero que
+     * avisa de algo que puede reventar en carretera — asi que se queda
+     * encendido siempre y habla por su cuenta.
+     *
+     * Se avisa UNA vez por rueda, al cruzar el umbral hacia abajo, y no se
+     * vuelve a avisar hasta que esa rueda se recupere. Una notificacion que
+     * se repite cada trama es una que el dueño aprende a ignorar, y entonces
+     * deja de servir el dia que importa.
+     */
+    private fun revisarPresiones() {
+        val lector = lectorTpms ?: return
+        val estado = runCatching { lector.estado() }.getOrNull() ?: return
+
+        for (lectura in estado.ruedas.values) {
+            val clave = lectura.rueda.name
+            // presionBaja vive en la TRAMA, no en la lectura. Y se exige
+            // ademas que el dato no sea rancio: avisar de una llanta baja con
+            // una medida de hace media hora es avisar de algo que quiza ya no
+            // pasa, y una alerta falsa gasta la credibilidad de la siguiente.
+            val baja = runCatching {
+                lectura.trama.presionBaja && !lectura.rancia(System.currentTimeMillis())
+            }.getOrDefault(false)
+            val yaAvisada = ruedasAvisadas[clave] == true
+
+            if (baja && !yaAvisada) {
+                ruedasAvisadas[clave] = true
+                runCatching { avisarPresionBaja(lectura) }
+                    .onFailure { Log.w(TAG, "no se pudo avisar: ${it.message}") }
+            } else if (!baja && yaAvisada) {
+                // Se recupero: se rearma para poder volver a avisar.
+                ruedasAvisadas.remove(clave)
+                runCatching {
+                    (getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+                        ?.cancel(NOTIF_PRESION_BASE + lectura.rueda.ordinal)
+                }
+            }
+        }
+    }
+
+    private fun avisarPresionBaja(lectura: com.nonosky.s2000dash.tpms.LecturaRueda) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Canal APARTE del que sostiene el servicio, y con importancia
+            // ALTA: el del servicio va en silencio a proposito para no
+            // molestar, y si la alerta compartiera canal heredaria ese
+            // silencio justo cuando hace falta que suene.
+            val canal = NotificationChannel(
+                CANAL_ALERTA, "Avisos de llantas", NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Presion baja en una llanta"
+                enableVibration(true)
+            }
+            nm.createNotificationChannel(canal)
+        }
+
+        val psi = lectura.presionPsi?.let { String.format("%.0f", it) } ?: "?"
+        val abrir = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, DashActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            },
+        )
+
+        val aviso = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CANAL_ALERTA)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+            .setContentTitle("Presion baja: ${lectura.rueda.corta}")
+            .setContentText(
+                "$psi PSI — la placa pide " +
+                    com.nonosky.s2000dash.tpms.Escalas.PSI_PLACA.toInt()
+            )
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentIntent(abrir)
+            .setAutoCancel(true)
+            .build()
+
+        nm.notify(NOTIF_PRESION_BASE + lectura.rueda.ordinal, aviso)
     }
 
     /**
@@ -707,6 +803,12 @@ class DashService : Service() {
         private const val TAG = "DashService"
         private const val CANAL = "s2000dash"
         private const val ID_NOTIFICACION = 1
+
+        /** Canal APARTE, con importancia alta: la alerta tiene que sonar. */
+        private const val CANAL_ALERTA = "s2000dash-llantas"
+
+        /** Una notificacion por rueda, para poder retirarlas por separado. */
+        private const val NOTIF_PRESION_BASE = 100
         private const val INTERVALO_MS = 15 * 60 * 1000L
 
         /**
