@@ -150,8 +150,38 @@ class DashService : Service() {
             if (lect == null) {
                 "no hay ninguna rueda leyendo todavia"
             } else {
+                // La MISMA funcion y los mismos argumentos que el pinchazo
+                // real de revisarPinchazo. Si la prueba usara otra ruta,
+                // estaria comprobando una alerta que nadie va a oir nunca.
                 avisarPresionBaja(lect, pinchazo = true, caida = 4.5f)
-                "alerta de PRUEBA lanzada sobre ${lect.rueda.corta} — deberia sonar"
+                // "deberia sonar" no vale como respuesta. La forma mas comun
+                // de que no suene no es un fallo del codigo sino que Android
+                // tenga el canal silenciado o las notificaciones apagadas, y
+                // eso NO lanza excepcion: la llamada devuelve bien y el carro
+                // se queda callado. Asi que se pregunta y se dice.
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                val permitidas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    nm?.areNotificationsEnabled() != false
+                } else {
+                    true
+                }
+                val canal = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    nm?.getNotificationChannel(CANAL_ALERTA)
+                } else {
+                    null
+                }
+                val id = NOTIF_PRESION_BASE + lect.rueda.ordinal + NOTIF_PINCHAZO_OFFSET
+                listOf(
+                    "alerta de PRUEBA lanzada sobre ${lect.rueda.corta} (id $id)",
+                    "ruta: avisarPresionBaja(pinchazo=true) — la MISMA que un pinchazo real",
+                    "gestor de notificaciones: ${if (nm == null) "NULO — no salio nada" else "vivo"}",
+                    "notificaciones permitidas: ${if (permitidas) "si" else "NO — no sonara"}",
+                    "canal $CANAL_ALERTA: importancia=${canal?.importance ?: -1}" +
+                        " (4=alta, 0=silenciado a mano, -1=sin canal o Android viejo)" +
+                        "  sonido=${if (canal?.sound != null) "si" else "NO"}",
+                    "lo que esto NO prueba: el detector de pinchazo" +
+                        " (>= $PSI_CAIDA_PINCHAZO PSI en ${MS_VENTANA_PINCHAZO / 1000}s)",
+                ).joinToString("\n")
             }
         }
 
@@ -196,6 +226,161 @@ class DashService : Service() {
                 )
             }.onFailure { Log.w(TAG, "no se pudo mandar '$comando': ${it.message}") }
         }
+        // EL DIAGNOSTICO EN REMOTO. Y LO PRIMERO QUE HACE ES APAGAR EL SONDEO.
+        //
+        // LectorDtc abre su PROPIA conexion SPP —no le queda otra: el modo 03
+        // exige fijarle la temporizacion al adaptador con ATAT0 + ATST FF, y
+        // hacerselo al sondeo en marcha le estropearia el ritmo a mitad de una
+        // lectura— y el Steren solo atiende UN enlace RFCOMM a la vez. Con el
+        // sondeo corriendo, el segundo socket o muere en las cuatro vias de
+        // SppTransport, o peor: si el clon acepta los dos, una respuesta de
+        // RPM cae dentro del buffer del modo 03 y se decodifica como averias
+        // que el carro no tiene, o corta la respuesta multi-trama y se pierden
+        // codigos en silencio, que es justo lo que el ATAT0 venia a evitar.
+        //
+        // La pantalla de averias NO protege de esto —llama al lector a pelo—
+        // y por HTTP hace mas falta todavia, porque se dispara desde la laptop
+        // sin nadie mirando el carro.
+        val cerrojoDtc = java.util.concurrent.atomic.AtomicBoolean(false)
+        EstadoActual.leerDtc = { borrar ->
+            // Uno a la vez. El puente atiende hasta cuatro peticiones en
+            // paralelo, y dos lecturas de codigos simultaneas son exactamente
+            // la colision que todo lo de abajo viene a evitar.
+            if (!cerrojoDtc.compareAndSet(false, true)) {
+                listOf("ya hay una lectura de codigos en marcha; espera a que termine")
+            } else {
+                val salida = mutableListOf<String>()
+                // El estado se mira ANTES de parar nada: en cuanto se apaga el
+                // sondeo, el RPM envejece y ya no se puede saber si el motor
+                // estaba girando cuando llego la peticion.
+                val antes = EstadoActual.ultimo
+                val teniaSondeo = sondeoInterno != null
+                val teniaDongle = lectorObd != null
+                // La tabla solo se suelta si la cargamos NOSOTROS: si la
+                // pantalla de averias esta abierta la tabla es suya, y tirarsela
+                // le dejaria los codigos sin explicacion en la mano.
+                val tablaEraNuestra = com.nonosky.s2000dash.diag.TablaDtc.cargados == 0
+                try {
+                    if (teniaSondeo) {
+                        // El colector se cancela ANTES de parar el sondeo: al
+                        // reves, el Disconnected que publica stop() no llega a
+                        // nadie y el tablero se queda pintando el ultimo RPM
+                        // como si el enlace siguiera vivo.
+                        runCatching { enlaceInterno?.cancel() }
+                        runCatching { sondeoInterno?.stop() }
+                        runCatching { alcanceInterno?.cancel() }
+                        enlaceInterno = null
+                        sondeoInterno = null
+                        alcanceInterno = null
+                        // Se marca desconectado pero NO se borran los valores:
+                        // la vista ya los pinta en gris al ponerse rancios, y
+                        // vaciarlos haria parpadear el tablero entero por una
+                        // pausa de medio minuto.
+                        EstadoActual.ultimo = antes.copy(
+                            connection = ConnectionState.Disconnected,
+                        )
+                        runCatching { EstadoActual.alCambiarObd?.invoke() }
+                        salida += "sondeo interno detenido para dejarle el ELM327 al lector"
+                    }
+                    if (teniaDongle) {
+                        // El dongle habla con el MISMO ELM327 por otra radio:
+                        // pausar solo el sondeo interno no libera nada.
+                        runCatching { lectorObd?.detener() }
+                        lectorObd = null
+                        EstadoActual.lectorObd = null
+                        EstadoActual.comandoObd = null
+                        salida += "lector del dongle detenido (es el mismo adaptador)"
+                    }
+                    // El vigilante se PAUSA, no se detiene: no hay forma de
+                    // saber si el dueño lo arranco por radio interna o por
+                    // dongle, y revivirlo por el camino equivocado le cambiaria
+                    // la configuracion sin decirselo.
+                    vigilante?.pausar()
+
+                    if (teniaSondeo || teniaDongle) {
+                        // Cerrar el socket por este lado no significa que el
+                        // adaptador se haya enterado. El clon tarda en soltar
+                        // el canal, y reconectar de inmediato falla con un error
+                        // que parece un adaptador roto cuando es prisa nuestra.
+                        //
+                        // Dos segundos NO bastaban, medido en el carro: con esa
+                        // espera, SppTransport se lanzaba a sus cuatro vias
+                        // contra un adaptador todavia ocupado y la peticion
+                        // entera tardo CUATRO MINUTOS en vez de medio minuto.
+                        // El socket del puente se muere a los 120 s, asi que
+                        // quien preguntaba se quedaba sin respuesta de una
+                        // lectura que si estaba ocurriendo.
+                        runCatching { Thread.sleep(MS_SOLTAR_ADAPTADOR) }
+                    }
+
+                    if (borrar && (antes.rpm ?: 0) > 0 &&
+                        !antes.isStale(antes.rpmAtMs, System.currentTimeMillis())
+                    ) {
+                        salida += "OJO: hace un momento el motor giraba a ${antes.rpm} rpm, " +
+                            "y muchas ECU rechazan el modo 04 con el motor en marcha"
+                    }
+
+                    com.nonosky.s2000dash.diag.TablaDtc.cargar(applicationContext)
+                    val lector = com.nonosky.s2000dash.diag.LectorDtc(radioInterna, MAC_OBD)
+                    val r = if (borrar) lector.borrar() else lector.leer()
+
+                    salida += if (borrar) "--- BORRADO (modo 04) ---" else "--- LECTURA ---"
+                    // El error va ARRIBA y no al final. Quien mira esto por HTTP
+                    // lee la primera pantalla, y un fallo de enlace escondido
+                    // bajo treinta lineas de traza se acaba leyendo como "el
+                    // carro esta sano", que es la peor mentira posible aqui.
+                    r.error?.let { salida += "ERROR: $it" }
+                    salida += "luz de averia: " + (if (r.luzEncendida) "ENCENDIDA" else "apagada")
+                    salida += "la ECU dice tener " +
+                        (if (r.cuantosDiceLaEcu < 0) "?" else "${r.cuantosDiceLaEcu}") +
+                        " codigos confirmados"
+                    for ((rotulo, lista) in listOf(
+                        "GUARDADOS" to r.guardados,
+                        "PENDIENTES" to r.pendientes,
+                        "PERMANENTES" to r.permanentes,
+                    )) {
+                        salida += "$rotulo (${lista.size}):"
+                        if (lista.isEmpty()) salida += "  (ninguno)"
+                        for (c in lista) {
+                            val e = com.nonosky.s2000dash.diag.TablaDtc.de(c.texto)
+                            salida += "  ${c.texto}  " +
+                                (e?.titulo ?: "(no catalogado para este carro)")
+                        }
+                    }
+                    // La traza cruda ENTERA, siempre, aunque todo haya ido bien.
+                    // Es el motivo de existir de esta ruta: desde la laptop,
+                    // "sin averias" y "no hable con la ECU" se leen igual si no
+                    // se ve lo que contesto el adaptador palabra por palabra.
+                    salida += "--- lo que dijo el ELM327, palabra por palabra ---"
+                    salida += r.traza
+                } catch (e: Exception) {
+                    salida += "ERROR: ${e.javaClass.simpleName}: ${e.message}"
+                } finally {
+                    if (tablaEraNuestra) com.nonosky.s2000dash.diag.TablaDtc.soltar()
+                    // Devolver el carro como estaba, pase lo que pase. Dejar el
+                    // tablero sin sondeo porque una lectura fallo seria cambiar
+                    // un diagnostico por una averia nueva.
+                    if (teniaSondeo) {
+                        // Con runCatching a proposito: si reanudar lanza, el
+                        // `finally` se corta y el dongle y el vigilante se
+                        // quedan sin reanudar tambien. Un fallo al volver no
+                        // puede arrastrar a los demas.
+                        runCatching { arrancarObdInterno() }
+                            .onSuccess { salida += "sondeo interno reanudado" }
+                            .onFailure { salida += "OJO: el sondeo interno NO volvio: ${it.message}" }
+                    }
+                    if (teniaDongle) {
+                        runCatching { arrancarObd() }
+                            .onSuccess { salida += "lector del dongle reanudado" }
+                            .onFailure { salida += "OJO: el dongle NO volvio: ${it.message}" }
+                    }
+                    vigilante?.reanudar()
+                    cerrojoDtc.set(false)
+                }
+                salida
+            }
+        }
+
         EstadoActual.pidsSoportados = {
             val salida = mutableListOf<String>()
             val adapter = radioInterna
@@ -355,13 +540,19 @@ class DashService : Service() {
                     // excepcion suelta ahi se lleva el servicio, el puente y
                     // el aviso de las llantas por delante.
                     runCatching {
+                        val velocidad = if (pos.hasSpeed()) pos.speed else 0f
+                        val precision = if (pos.hasAccuracy()) pos.accuracy else 999f
+                        // Se anota ANTES de mirar si hay posicion previa. La
+                        // primera fija de cada arranque no produce distancia
+                        // —no hay contra que restar— y si solo se contaran las
+                        // que suman, un receptor que engancha de tarde en
+                        // tarde se veria exactamente igual que uno muerto.
+                        Mantenimiento.anotarFijaGps(velocidad, precision)
                         val previa = ultimaPosicion
                         ultimaPosicion = pos
                         if (previa == null) return@runCatching
                         Mantenimiento.sumarDistancia(
-                            previa.distanceTo(pos),
-                            if (pos.hasSpeed()) pos.speed else 0f,
-                            if (pos.hasAccuracy()) pos.accuracy else 999f,
+                            previa.distanceTo(pos), velocidad, precision,
                         )
                     }
                 }
@@ -1005,6 +1196,15 @@ class DashService : Service() {
         private const val CANAL_ALERTA = "s2000dash-llantas"
 
         /** Una notificacion por rueda, para poder retirarlas por separado. */
+        /**
+         * Lo que se le da al adaptador para soltar el canal antes de reabrirlo.
+         *
+         * Medido contra el Steren del carro: con 2 s todavia estaba ocupado y
+         * la reconexion se iba a minutos. No es un numero de manual, es lo que
+         * hizo falta.
+         */
+        private const val MS_SOLTAR_ADAPTADOR = 6_000L
+
         private const val NOTIF_PRESION_BASE = 100
 
         /** El pinchazo va en su propio rango de ids. */

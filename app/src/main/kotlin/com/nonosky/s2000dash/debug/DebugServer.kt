@@ -34,8 +34,10 @@ import kotlin.concurrent.thread
  *  - `GET /log`     bitacora de actualizaciones
  *  - `GET /update`  fuerza revision e instalacion de una version nueva
  *
- * Escucha solo en la red local del taller y no expone nada que escriba en
- * el carro: se puede mirar y se puede pedir una actualizacion, nada mas.
+ * Escucha solo en la red local del taller. Casi todo lo que expone se limita
+ * a mirar, con UNA excepcion: `/dtc?borrar=1` manda el modo 04 a la ECU. Por
+ * eso el borrado exige ese parametro explicito y `/dtc` a secas solo lee —
+ * quien no lo escriba no puede escribir en el carro por accidente.
  */
 class DebugServer(
     private val port: Int = PORT,
@@ -371,6 +373,25 @@ class DebugServer(
                         .getOrNull() ?: listOf("ERROR: el servicio no registro la consulta de PIDs")
                     sendText(out, 200, "text/plain", lista.joinToString(SALTO))
                 }
+                "/dtc" -> {
+                    // Los codigos de averia sin tocar el radio. La pantalla de
+                    // diagnostico es exported=false, asi que hasta ahora la
+                    // unica forma de probarla desde fuera era tocar coordenadas
+                    // a ciegas por ADB y adivinar por la foto si acerto.
+                    //
+                    // El borrado es lo UNICO de todo el puente que escribe en
+                    // el carro, asi que se pide con todas las letras: sin
+                    // borrar=1 esta ruta solo mira. Escribir mal el parametro
+                    // no puede acabar en un borrado.
+                    //
+                    // El servicio es quien contesta porque es el unico que
+                    // puede apagar el sondeo antes: el lector abre su propia
+                    // conexion y el ELM327 solo atiende a un enlace.
+                    val borrar = consulta["borrar"] == "1"
+                    val lista = runCatching { EstadoActual.leerDtc?.invoke(borrar) }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro la lectura de codigos")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
                 "/obd-spp" -> {
                     // El mismo dialogo AT que /obd-hci, pero por la radio
                     // interna del head unit en vez del dongle USB.
@@ -395,8 +416,37 @@ class DebugServer(
                 }
                 "/vtec" -> {
                     val seg = (consulta["segundos"]?.toIntOrNull() ?: 6).coerceIn(1, 60)
-                    EstadoActual.vtecForzadoHastaMs = System.currentTimeMillis() + seg * 1000L
-                    sendText(out, 200, "text/plain", "VTEC forzado ${seg}s (solo el aviso)")
+                    // Con `forzar=0` solo se lee. Hacia falta poder preguntar
+                    // "¿engancho alguna vez?" sin encender el aviso: si mirar
+                    // obliga a forzarlo, la pregunta contamina la respuesta y
+                    // el dueño ve un rojo que no hizo el motor.
+                    val forzar = consulta["forzar"] != "0"
+                    val ahora = System.currentTimeMillis()
+                    if (forzar) EstadoActual.vtecForzadoHastaMs = ahora + seg * 1000L
+                    val s = stateProvider()
+                    val ec = com.nonosky.s2000dash.EngineConstants
+                    val faltan = (ec.RPM_VTEC - EstadoActual.rpmMaximasConCarga).coerceAtLeast(0)
+                    val lineas = listOf(
+                        if (forzar) "VTEC forzado ${seg}s (solo el aviso)"
+                        else "no se forzo nada (forzar=0)",
+                        "",
+                        "condicion: rpm >= ${ec.RPM_VTEC} Y carga >= ${ec.VTEC_MIN_LOAD_PCT}%" +
+                            ", con la carga fresca",
+                        "ahora: rpm=${s.rpm ?: "--"}  carga=${s.loadPct ?: "--"}%" +
+                            "  cumple=${if (s.vtecActive) "SI" else "no"}",
+                        "",
+                        "veces que engancho: ${EstadoActual.vecesVtec}",
+                        "ultima vez: " + (
+                            if (EstadoActual.ultimoVtecMs == 0L) "NUNCA"
+                            else "hace ${(ahora - EstadoActual.ultimoVtecMs) / 1000}s"
+                            ),
+                        "rpm maximas vistas: ${EstadoActual.rpmMaximasVistas}" +
+                            "  (con carga ${EstadoActual.cargaEnRpmMaximas}%)",
+                        "rpm maximas CON carga suficiente: ${EstadoActual.rpmMaximasConCarga}",
+                        "faltaron $faltan rpm para el enganche real",
+                        "(contadores en RAM desde que arranco el proceso)",
+                    )
+                    sendText(out, 200, "text/plain", lineas.joinToString(SALTO))
                 }
                 "/soltar-bt" -> {
                     val r = runCatching { EstadoActual.soltarBluetooth?.invoke() }
@@ -730,37 +780,63 @@ class DebugServer(
         val RUTAS_LENTAS = setOf(
             "/buscar", "/emparejar", "/ble", "/gatt", "/hci", "/hci-ble",
             "/serial", "/bateria-gatt", "/obd-hci", "/obd-spp", "/pids", "/update",
-            "/instalar-companero", "/pantalla", "/apps",
+            // /dtc es de las mas lentas de todas: espera a que el sondeo suelte
+            // el adaptador, abre su propio enlace y pregunta tres modos con
+            // plazo de 3 s cada uno. Sin estar aqui, el socket muere a los 3 s
+            // y el operador se queda sin respuesta de una lectura que si esta
+            // ocurriendo, con el sondeo ya parado y sin ver cuando vuelve.
+            "/instalar-companero", "/pantalla", "/apps", "/dtc",
         )
         val HELP = """
             S2000 Dash - puente de diagnostico
-              /state     estado del vehiculo y del enlace (JSON)
-              /shot.png  el tablero tal como se ve ahora
-              /log       bitacora de actualizaciones
-              /update    busca e instala version nueva
-              /adaptadores  adaptadores Bluetooth emparejados
-              /elegir?mac=  elige adaptador OBD ya emparejado
-              /buscar       barre el aire en busca de adaptadores
+              /state           estado del vehiculo y del enlace (JSON)
+              /shot.png        el tablero tal como se ve ahora
+              /log             bitacora de actualizaciones
+              /update          busca e instala version nueva
+              /vtec?segundos=6 enciende el aviso de VTEC un rato, solo para verlo
+              /aceite?odometro=&proximo=&intervalo=&horas=&cambiado=1  cuanto le queda al aceite y anotar el cambio hecho
+              /adaptadores     adaptadores Bluetooth emparejados
+              /elegir?mac=     elige adaptador OBD ya emparejado
+              /buscar          barre el aire en busca de adaptadores
               /emparejar?mac=  empareja y elige
-              /olvidar      olvida el adaptador guardado
+              /desvincular?mac=  saca un aparato del Bluetooth del carro; por omision, el OBD
+              /olvidar         olvida el adaptador guardado
               /bluetooth?on=1  enciende (o apaga con on=0) la radio Bluetooth
+              /soltar-bt       suelta la radio Bluetooth entera para que la use el telefono
               /ble?segundos=10 barrido Bluetooth LE con el anuncio crudo
               /gatt?mac=       servicios y caracteristicas de un aparato BLE
               /usb             lo que hay colgado del USB (VID, PID, endpoints)
               /pantalla        vuelca el arbol de la ventana activa, con coordenadas
               /tocar?x=&y=     toca un punto de la pantalla
-              /arrastrar?x1=&y1=&x2=&y2=   arrastra
+              /arrastrar?x1=&y1=&x2=&y2=  arrastra
               /pulsar?texto=   pulsa el nodo que diga ese texto
               /escribir?texto= escribe en el campo editable que haya
               /accion?a=atras|inicio|recientes|notificaciones
               /abrir?paquete=  abre una app
               /apps?filtro=    lista lo instalado
+              /confirmador     lo ultimo que contesto la app companera
+              /instalar-companero?url=&paquete=  instala o actualiza la app companera desde una URL
+              /ajustes?que=&paquete=  abre una pantalla de ajustes del radio; sin destino, los lista
+              /interruptores   si el radio trae puestos ADB y accesibilidad
+              /overlays        que apps pueden dibujar encima y tragarse los toques
+              /termica         que tan caliente esta el radio y cuanto esta cediendo
+              /zonas           lo que marca cada sensor de temperatura del radio
+              /cpu             a que velocidad va cada nucleo del radio
+              /fuente?cual=motor&on=1  enciende o apaga en caliente el motor o la bateria
               /at?cmd=0100,0120  manda comandos crudos al ELM327
+              /dtc             codigos de averia, con la traza cruda del ELM327
+              /dtc?borrar=1    los borra (modo 04) y comprueba que se fueron
+              /pids            que datos sabe dar la computadora del carro
+              /obd-traza       que esta haciendo el lector del motor, sin tocarlo
               /tpms            presiones y temperaturas de las cuatro llantas
+              /probar-alerta   lanza el aviso de llanta baja para oir como suena
               /pin?mac=&pin=   a quien emparejar y con que PIN
+              /armar-pin?pin=1234  deja al companero listo para teclear ese PIN
               /bateria         estado del BMS de litio por BLE
               /bateria-gatt?mac=  conecta por GATT y lee el BMS, con traza
+              /bateria-fijar?mac=  fija cual bateria es la del carro; sin mac, la desfija
               /obd-hci?mac=    OBD por RFCOMM sobre HCI crudo, con traza
+              /obd-spp?mac=    OBD por el Bluetooth del propio radio, con traza
               /dongle          quien tiene tomado el dongle Bluetooth
               /serial?baudios=19200&segundos=8  vuelca el USB-serial en crudo
               /hci?vid=&pid=   interroga por HCI al dongle Bluetooth USB

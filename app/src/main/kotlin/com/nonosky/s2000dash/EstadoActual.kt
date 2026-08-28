@@ -13,7 +13,92 @@ import java.lang.ref.WeakReference
 object EstadoActual {
 
     @Volatile
-    var ultimo: VehicleState = VehicleState()
+    private var ultimoInterno: VehicleState = VehicleState()
+
+    /**
+     * El estado se publica por aqui para poder CONTARLO al pasar.
+     *
+     * El fondo rojo del VTEC dura dos segundos y pide 5850 rpm con el pedal a
+     * fondo: para cuando alguien pregunta por HTTP, ya paso. Sin contar al
+     * vuelo, "no vi el rojo" y "la condicion no se cumplio nunca" son la misma
+     * respuesta, y una se arregla mirando mejor y la otra pisando mas.
+     *
+     * Este es ademas el unico embudo por el que pasan los cuatro publicadores
+     * (radio interna, dongle y pantalla), asi que contar aqui no obliga a
+     * tocar ni el sondeo ni la vista.
+     */
+    var ultimo: VehicleState
+        get() = ultimoInterno
+        set(nuevo) {
+            ultimoInterno = nuevo
+            anotarVtec(nuevo)
+        }
+
+    // --- Lo que se aprende del motor al pasar --------------------------------
+
+    /** Maximas revoluciones vistas desde que arranco el proceso. */
+    @Volatile
+    var rpmMaximasVistas = 0
+        private set
+
+    /** La carga que habia en ese pico: dice si se subio a fondo o levantando. */
+    @Volatile
+    var cargaEnRpmMaximas = 0
+        private set
+
+    /**
+     * Maximas rpm alcanzadas CON carga suficiente.
+     *
+     * Es el numero que de verdad falta hoy: `sessionMaxRpm` dice a cuanto se
+     * subio, pero no con que pedal, y la mitad de la condicion del VTEC es el
+     * pedal. Con este se sabe cuantas rpm faltaron para el enganche real.
+     */
+    @Volatile
+    var rpmMaximasConCarga = 0
+        private set
+
+    /** Veces que la condicion COMPLETA se cumplio, con la carga fresca. */
+    @Volatile
+    var vecesVtec = 0L
+        private set
+
+    /** Cuando fue la ultima. Cero = no ha pasado nunca. */
+    @Volatile
+    var ultimoVtecMs = 0L
+        private set
+
+    /**
+     * La misma muestra se republica cuando solo cambia el enlace
+     * (`copy(connection = ...)` de la pantalla). Contarla otra vez inflaria
+     * `vecesVtec` sin que el motor hubiera hecho nada, asi que se contabiliza
+     * por el sello de tiempo de las revoluciones, que es lo unico que cambia
+     * con cada lectura nueva de verdad.
+     */
+    @Volatile
+    private var rpmYaContadaMs = 0L
+
+    private fun anotarVtec(st: VehicleState) {
+        val rpm = st.rpm ?: return
+        if (st.rpmAtMs == rpmYaContadaMs) return
+        rpmYaContadaMs = st.rpmAtMs
+        val carga = st.loadPct ?: 0
+        if (rpm > rpmMaximasVistas) {
+            rpmMaximasVistas = rpm
+            cargaEnRpmMaximas = carga
+        }
+        if (carga >= EngineConstants.VTEC_MIN_LOAD_PCT && rpm > rpmMaximasConCarga) {
+            rpmMaximasConCarga = rpm
+        }
+        // Se exige la carga FRESCA igual que la exige el fondo rojo. Si el
+        // contador aceptara carga rancia diria que engancho en un instante en
+        // que el tablero no pinto nada, y entonces no estaria midiendo lo que
+        // se quiere verificar sino otra cosa parecida.
+        val ahora = System.currentTimeMillis()
+        if (st.vtecActive && !st.isStale(st.loadAtMs, ahora)) {
+            vecesVtec++
+            ultimoVtecMs = ahora
+        }
+    }
 
     /**
      * Nombre y MAC del adaptador elegido, para poder diagnosticarlo en
@@ -186,6 +271,19 @@ object EstadoActual {
 
     /** Le pregunta a la ECU que PIDs soporta, en vez de suponerlo. */
     var pidsSoportados: (() -> List<String>)? = null
+    /**
+     * Lee los codigos de averia. Con `true` los BORRA (modo 04).
+     *
+     * Vive aqui y no en la pantalla de averias por dos razones. La pantalla es
+     * `exported=false`, asi que la unica forma de probar el diagnostico desde
+     * fuera del carro era tocar coordenadas a ciegas por ADB. Y sobre todo:
+     * quien lea codigos tiene que apagar antes el sondeo del tablero, porque
+     * el lector abre su PROPIA conexion al ELM327 y el adaptador solo atiende
+     * a un enlace. Eso solo lo sabe hacer el servicio, que es el dueño del
+     * sondeo — una Activity no puede pararlo.
+     */
+    @Volatile
+    var leerDtc: ((Boolean) -> List<String>)? = null
 
     /** La pantalla se registra aqui para repintar cuando llega dato del motor. */
     @Volatile

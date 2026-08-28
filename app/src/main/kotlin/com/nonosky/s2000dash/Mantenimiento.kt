@@ -91,6 +91,80 @@ object Mantenimiento {
 
     /** Precision peor que esto no se cree para medir distancia. */
     const val PRECISION_MAXIMA_M = 40f
+    // --- Contadores para poder VER si el GPS esta contando -------------------
+
+    /**
+     * Van en RAM y no en disco, a proposito.
+     *
+     * Lo que contestan es "¿esta llegando el GPS AHORA?", y un contador
+     * guardado del mes pasado diria que si de una antena que lleva dias
+     * muerta. Ademas escribir en SharedPreferences en cada fija —cada cinco
+     * segundos con el carro andando— castigaria la memoria del radio a cambio
+     * de un dato que solo sirve mientras dura la prueba.
+     */
+    @Volatile
+    var fijasGps = 0L
+        private set
+
+    /** De esas, las que si sumaron distancia. */
+    @Volatile
+    var fijasSumadas = 0L
+        private set
+
+    /**
+     * Descartes, uno por guarda, y separados a proposito.
+     *
+     * Con un solo total, "el carro estuvo parado" y "el receptor da 300 m de
+     * error" son el mismo cero de kilometros. El primero no se arregla y el
+     * segundo es antena o cielo tapado: hay que poder distinguirlos.
+     */
+    @Volatile
+    var descartesSinAvance = 0L
+        private set
+
+    @Volatile
+    var descartesPorLenta = 0L
+        private set
+
+    @Volatile
+    var descartesPorPrecision = 0L
+        private set
+
+    @Volatile
+    var descartesPorSalto = 0L
+        private set
+
+    /** La ultima fija tal cual llego. ultimaFijaMs en cero = no llego nunca. */
+    @Volatile
+    var ultimaVelocidadMs = 0f
+        private set
+
+    @Volatile
+    var ultimaPrecisionM = 0f
+        private set
+
+    @Volatile
+    var ultimoTramoM = 0f
+        private set
+
+    @Volatile
+    var ultimaFijaMs = 0L
+        private set
+
+    /**
+     * Una fija del receptor, se use o no para sumar.
+     *
+     * Va aparte de [sumarDistancia] porque la primera fija de cada arranque
+     * nunca llega a sumar —no hay posicion previa contra la que medir— y es
+     * justo la que hace falta ver para saber si el receptor engancha. Sin
+     * esto, uno que engancha de vez en cuando se ve igual que uno muerto.
+     */
+    fun anotarFijaGps(velocidadMs: Float, precisionM: Float) {
+        fijasGps++
+        ultimaVelocidadMs = velocidadMs
+        ultimaPrecisionM = precisionM
+        ultimaFijaMs = System.currentTimeMillis()
+    }
 
     @Volatile
     private var prefs: SharedPreferences? = null
@@ -203,13 +277,27 @@ object Mantenimiento {
      * velocidad, y es exactamente lo que hay que descartar.
      */
     fun sumarDistancia(metros: Float, velocidadMs: Float, precisionM: Float): Boolean {
-        if (metros <= 0f || !metros.isFinite()) return false
-        if (velocidadMs < VELOCIDAD_MINIMA_MS) return false
-        if (precisionM <= 0f || precisionM > PRECISION_MAXIMA_M) return false
+        if (metros <= 0f || !metros.isFinite()) {
+            descartesSinAvance++
+            return false
+        }
+        if (velocidadMs < VELOCIDAD_MINIMA_MS) {
+            descartesPorLenta++
+            return false
+        }
+        if (precisionM <= 0f || precisionM > PRECISION_MAXIMA_M) {
+            descartesPorPrecision++
+            return false
+        }
         // Un salto absurdo entre dos muestras seguidas no es un viaje: es el
         // receptor reenganchandose. A 5 s por muestra, 500 m serian 360 km/h.
-        if (metros > 500f) return false
+        if (metros > 500f) {
+            descartesPorSalto++
+            return false
+        }
         metrosDesdeAncla += metros.toDouble()
+        ultimoTramoM = metros
+        fijasSumadas++
         return true
     }
 
@@ -249,5 +337,27 @@ object Mantenimiento {
         ),
         "horas de motor totales contadas: %.1f".format(horasTotales),
         "toca cambiar: ${if (toca) "SI" else "no"}${if (!toca && cerca) " (pero ya cerca)" else ""}",
+        "",
+        // Sin estas lineas, un "0,3 km" es indistinguible de un receptor que
+        // no ha entregado una sola posicion en su vida, y las dos cosas se
+        // arreglan de forma opuesta: una es esperar y la otra es ir al carro.
+        "GPS: fijas=%d  sumadas=%d  ultima hace %s".format(
+            fijasGps, fijasSumadas,
+            if (ultimaFijaMs == 0L) "NUNCA"
+            else "${(System.currentTimeMillis() - ultimaFijaMs) / 1000}s",
+        ),
+        "  descartadas: sin avance=%d  lenta=%d  imprecisa=%d  salto=%d".format(
+            descartesSinAvance, descartesPorLenta,
+            descartesPorPrecision, descartesPorSalto,
+        ),
+        "  ultima fija: %.1f m/s (%.0f km/h)  +-%.0f m  tramo %.0f m".format(
+            ultimaVelocidadMs, ultimaVelocidadMs * 3.6f, ultimaPrecisionM, ultimoTramoM,
+        ),
+        "  guardas: velocidad >= %.1f m/s y precision <= %.0f m".format(
+            VELOCIDAD_MINIMA_MS, PRECISION_MAXIMA_M,
+        ),
+        // Se avisa de que son de RAM porque el servicio tiene resurreccion
+        // programada: unas fijas en cero recien reiniciado no acusan a nadie.
+        "  (contadores en RAM: a cero cada vez que arranca el servicio)",
     )
 }

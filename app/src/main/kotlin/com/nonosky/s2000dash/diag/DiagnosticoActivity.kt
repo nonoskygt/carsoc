@@ -56,6 +56,24 @@ class DiagnosticoActivity : Activity() {
         super.onDestroy()
     }
 
+    /**
+     * El atras del sistema navega igual que el boton de la pantalla.
+     *
+     * Este radio no siempre pinta la barra de navegacion, pero el gesto y el
+     * boton del volante si llegan. Sin esto, atras cerraba el diagnostico
+     * entero desde el detalle de un codigo — tres pasos de golpe cuando se
+     * pedia uno — y habia que volver a leer la computadora para recuperar lo
+     * que ya estaba en pantalla.
+     */
+    @Deprecated("onBackPressed sigue siendo la via en API 30, que es la del radio")
+    @Suppress("DEPRECATION", "MissingSuperCall")
+    override fun onBackPressed() {
+        if (!vista.retroceder()) {
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+        }
+    }
+
     private fun lector(): LectorDtc {
         val adapter = runCatching {
             (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -94,6 +112,9 @@ class DiagnosticoActivity : Activity() {
 private class VistaDiagnostico(private val act: DiagnosticoActivity) : View(act) {
 
     private enum class Estado { MENU, TRABAJANDO, RESULTADO, DETALLE }
+
+// El boton de atras del sistema navega igual que el de la pantalla; ver
+// VistaDiagnostico.retroceder().
 
     private var estado = Estado.MENU
     private var mensaje = ""
@@ -192,7 +213,11 @@ private class VistaDiagnostico(private val act: DiagnosticoActivity) : View(act)
             "borrar apaga la luz, pero tambien borra los monitores de emisiones",
             w * 0.5f, h * 0.86f, texto,
         )
-        canvas.drawText("toca fuera de los botones para volver", w * 0.5f, h * 0.94f, texto)
+        canvas.drawText("o toca fuera de los botones", w * 0.5f, h * 0.94f, texto)
+        // El menu era la unica pantalla sin salida a la vista: la instruccion
+        // "toca fuera" hay que saberla de antes, y quien abre el diagnostico
+        // por primera vez no la sabe.
+        dibujarVolver(canvas, w, h)
     }
 
     private fun boton(canvas: Canvas, caja: RectF, etiqueta: String, color: Int, h: Float) {
@@ -417,24 +442,47 @@ private class VistaDiagnostico(private val act: DiagnosticoActivity) : View(act)
         return "$s..."
     }
 
+    /**
+     * El boton de atras, y dice ATRAS.
+     *
+     * Antes era una X sola en una esquina. En un tablero que se mira de reojo
+     * conduciendo, una X puede leerse como "cerrar la aplicacion entera" tanto
+     * como "volver un paso", y el radio no trae barra de navegacion del
+     * sistema donde comprobarlo: si uno se equivoca, se queda sin tablero en
+     * marcha. Una flecha con su palabra no admite esa duda.
+     *
+     * Va arriba a la IZQUIERDA a proposito, lejos de la X de cerrar el tablero
+     * que vive arriba a la derecha: dos gestos opuestos no deben caer bajo el
+     * mismo dedo.
+     */
     private fun dibujarVolver(canvas: Canvas, w: Float, h: Float) {
-        val lado = h * 0.13f
+        val alto = h * 0.14f
         val margen = h * 0.03f
-        cajaVolver.set(w - margen - lado, margen, w - margen, margen + lado)
-        relleno.color = FONDO
-        canvas.drawRect(cajaVolver, relleno)
+        val ancho = alto * 2.6f
+        cajaVolver.set(margen, margen, margen + ancho, margen + alto)
+        relleno.color = CAJA
+        canvas.drawRoundRect(cajaVolver, alto * 0.22f, alto * 0.22f, relleno)
         trazo.color = TENUE
         trazo.strokeWidth = h * 0.008f
-        canvas.drawRoundRect(cajaVolver, lado * 0.25f, lado * 0.25f, trazo)
-        val d = lado * 0.26f
-        canvas.drawLine(
-            cajaVolver.centerX() - d, cajaVolver.centerY() - d,
-            cajaVolver.centerX() + d, cajaVolver.centerY() + d, trazo,
+        canvas.drawRoundRect(cajaVolver, alto * 0.22f, alto * 0.22f, trazo)
+
+        // La flecha, a mano: tres trazos y no una fuente, porque el resto de
+        // la pantalla ya se dibuja asi y una fuente de iconos seria un peso
+        // nuevo en un modulo que se abre a mano y se cierra.
+        val cx = cajaVolver.left + alto * 0.62f
+        val cy = cajaVolver.centerY()
+        val d = alto * 0.20f
+        canvas.drawLine(cx + d, cy, cx - d, cy, trazo)
+        canvas.drawLine(cx - d, cy, cx, cy - d, trazo)
+        canvas.drawLine(cx - d, cy, cx, cy + d, trazo)
+
+        texto.color = TENUE
+        texto.textSize = alto * 0.42f
+        texto.textAlign = Paint.Align.LEFT
+        canvas.drawText(
+            "ATRAS", cx + d + alto * 0.28f, cy + texto.textSize * 0.36f, texto,
         )
-        canvas.drawLine(
-            cajaVolver.centerX() + d, cajaVolver.centerY() - d,
-            cajaVolver.centerX() - d, cajaVolver.centerY() + d, trazo,
-        )
+        texto.textAlign = Paint.Align.CENTER
     }
 
     // --- Toques -------------------------------------------------------------
@@ -472,6 +520,24 @@ private class VistaDiagnostico(private val act: DiagnosticoActivity) : View(act)
     override fun performClick(): Boolean {
         super.performClick()
         return true
+    }
+
+    /**
+     * Un paso atras. Devuelve false cuando ya no queda a donde volver.
+     *
+     * Lo usan el boton de la pantalla Y el boton de atras del sistema, para
+     * que no puedan discrepar: si cada uno navegara por su cuenta, el mismo
+     * gesto haria cosas distintas segun donde se toque, que es como se pierde
+     * la confianza en una pantalla que se mira de reojo.
+     */
+    fun retroceder(): Boolean = when (estado) {
+        Estado.DETALLE -> { estado = Estado.RESULTADO; invalidate(); true }
+        Estado.RESULTADO -> { estado = Estado.MENU; invalidate(); true }
+        // A media lectura no se retrocede: el lector ya paro el sondeo y esta
+        // hablando con la computadora. Salir aqui dejaria el hilo suelto
+        // terminando contra una pantalla que ya no existe.
+        Estado.TRABAJANDO -> true
+        Estado.MENU -> false
     }
 
     private fun manejarToque(x: Float, y: Float) {
