@@ -231,6 +231,17 @@ object EstadoActual {
     @Volatile
     var umbralPinchazo: String? = null
 
+    /**
+     * Si el receptor de GPS esta pedido ahora mismo.
+     *
+     * Hace falta para no volver a quedarse a ciegas: desde que el GPS se
+     * enciende y se apaga solo, un `fijas=0` puede significar "la antena no
+     * ve el cielo" o "lo apagamos nosotros a proposito", y son cosas muy
+     * distintas.
+     */
+    @Volatile
+    var gpsEncendido: (() -> Boolean)? = null
+
 
     /**
      * Fuerza el aviso de VTEC hasta este instante. SOLO para verlo.

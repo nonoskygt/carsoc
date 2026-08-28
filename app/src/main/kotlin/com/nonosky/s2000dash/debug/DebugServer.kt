@@ -421,7 +421,19 @@ class DebugServer(
                     consulta["intervalo"]?.toFloatOrNull()?.let { m.intervaloKm = it }
                     consulta["horas"]?.toFloatOrNull()?.let { m.intervaloHoras = it }
                     if (consulta["cambiado"] == "1") m.aceiteCambiado()
-                    sendText(out, 200, "text/plain", m.diagnostico().joinToString(SALTO))
+                    // Desde que el GPS se apaga solo con el carro parado o con
+                    // el radio caliente, un "fijas=0" tiene DOS causas que se
+                    // arreglan distinto: la antena no ve el cielo, o lo
+                    // apagamos nosotros a proposito. Sin esta linea vuelven a
+                    // ser el mismo cero.
+                    val gps = EstadoActual.gpsEncendido?.invoke()
+                    val extra = "receptor GPS: " + when (gps) {
+                        true -> "encendido"
+                        false -> "APAGADO a proposito (carro parado, o radio caliente)"
+                        null -> "el servicio no lo publico"
+                    }
+                    sendText(out, 200, "text/plain",
+                        (m.diagnostico() + extra).joinToString(SALTO))
                 }
                 "/vtec" -> {
                     val seg = (consulta["segundos"]?.toIntOrNull() ?: 6).coerceIn(1, 60)

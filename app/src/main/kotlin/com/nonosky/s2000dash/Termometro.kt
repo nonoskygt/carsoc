@@ -158,6 +158,20 @@ object Termometro {
     fun permiteBateria(): Boolean = nivel != Nivel.Caliente
 
     /**
+     * ¿Puede correr el receptor de GPS?
+     *
+     * Le faltaba la palanca. El OBD y la bateria se apagaban con el calor y el
+     * repintado bajaba a un cuadro por segundo, pero el GPS seguia pidiendo
+     * posiciones a cualquier temperatura, de arranque a muerte del servicio.
+     *
+     * Y es caro: medido en el radio a 85 C, `android.hardware.gnss@2.0-service`
+     * estaba al 8,8% de CPU —el segundo consumidor de la maquina— cazando
+     * satelites con el carro APAGADO, o sea calentando el radio para acumular
+     * cero kilometros.
+     */
+    fun permiteGps(): Boolean = nivel != Nivel.Caliente
+
+    /**
      * Milisegundos entre cuadros segun lo caliente que este.
      *
      * Sin termometro se repinta a 2 cuadros por segundo y no a 5. Es la

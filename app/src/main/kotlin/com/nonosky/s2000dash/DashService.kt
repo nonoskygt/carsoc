@@ -188,6 +188,7 @@ class DashService : Service() {
         // El hermano del boton de prueba: aquel demuestra que la alarma suena,
         // este que hay algo detras dispuesto a tocarla. Se registran juntos
         // porque por separado cada uno engaña.
+        EstadoActual.gpsEncendido = { oyenteGps != null }
         EstadoActual.umbralPinchazo = "perder %.1f PSI o mas en %ds seguidos".format(
             PSI_CAIDA_PINCHAZO, MS_VENTANA_PINCHAZO / 1000,
         )
@@ -613,6 +614,11 @@ class DashService : Service() {
      * se apago tres veces por eso.
      */
     private fun arrancarKilometraje() {
+        // Si ya hay uno pedido, no se pide otro. Ahora que el GPS se enciende y
+        // se apaga solo, esta funcion se llama muchas veces, y sin esta guarda
+        // cada reanudacion dejaria un oyente mas apilado sobre el receptor:
+        // justo el gasto que todo esto viene a quitar.
+        if (oyenteGps != null) return
         runCatching {
             val lm = getSystemService(Context.LOCATION_SERVICE)
                 as? android.location.LocationManager ?: return
@@ -650,6 +656,59 @@ class DashService : Service() {
             oyenteGps = oyente
             Log.i(TAG, "kilometraje por GPS en marcha")
         }.onFailure { Log.w(TAG, "GPS no arranco: ${it.message}") }
+    }
+
+    /** Cuando se vio el motor girando por ultima vez. Cero = nunca en esta vida. */
+    @Volatile
+    private var ultimoMotorVivoMs = 0L
+
+    /**
+     * Suelta el receptor de GPS.
+     *
+     * No pierde nada: los kilometros ya sumados viven en [Mantenimiento], que
+     * los guarda en disco. Lo unico que se va es el gasto.
+     */
+    private fun pararGps() {
+        val o = oyenteGps ?: return
+        oyenteGps = null
+        runCatching {
+            (getSystemService(Context.LOCATION_SERVICE)
+                as? android.location.LocationManager)?.removeUpdates(o)
+        }
+        Log.i(TAG, "GPS soltado")
+    }
+
+    /**
+     * ¿Hace falta el GPS ahora mismo?
+     *
+     * El odometro solo cuenta cuando el carro se mueve, asi que tener el
+     * receptor cazando satelites con el carro parado es calor a cambio de
+     * nada. Y el radio se estaba yendo a 85 C.
+     *
+     * Tres condiciones, y basta una:
+     *  - el motor esta girando AHORA, con lectura fresca;
+     *  - el propio GPS vio movimiento hace poco, que es lo que salva el caso
+     *    de que el enlace OBD se caiga a mitad de un viaje: entonces el GPS es
+     *    lo UNICO que queda contando y apagarlo perderia el viaje entero;
+     *  - se apago el motor hace menos de la gracia, para no soltar el receptor
+     *    en un semaforo y tener que volver a engancharlo al arrancar — un
+     *    reenganche en frio tarda su rato y esos metros no los cuenta nadie.
+     */
+    private fun quiereGps(): Boolean {
+        if (!Termometro.permiteGps()) return false
+        val ahora = System.currentTimeMillis()
+        val st = EstadoActual.ultimo
+        if (st.rpm != null && !st.isStale(st.rpmAtMs, ahora)) {
+            ultimoMotorVivoMs = ahora
+            return true
+        }
+        val fija = Mantenimiento.ultimaFijaMs
+        if (fija > 0L && ahora - fija < MS_GRACIA_GPS &&
+            Mantenimiento.ultimaVelocidadMs >= Mantenimiento.VELOCIDAD_MINIMA_MS
+        ) {
+            return true
+        }
+        return ultimoMotorVivoMs > 0L && ahora - ultimoMotorVivoMs < MS_GRACIA_GPS
     }
 
     /** Ruedas que ya estan avisadas, para no repetir la alerta. */
@@ -1214,6 +1273,15 @@ class DashService : Service() {
                         !st.isStale(st.rpmAtMs, ahora)
                     if (girando) Mantenimiento.sumarSegundosMotor(delta)
                 }
+
+                // El GPS se enciende y se apaga solo, desde aqui, porque este
+                // hilo ya late cada cinco segundos y no cuesta nada mas. Es el
+                // mismo trato que ya tienen el OBD y la bateria: cuando el
+                // radio se calienta, se cede lo que no es imprescindible.
+                runCatching {
+                    if (quiereGps()) arrancarKilometraje() else pararGps()
+                }
+
                 runCatching { Thread.sleep(5_000) }.onFailure { return@thread }
             }
         }
@@ -1392,6 +1460,16 @@ class DashService : Service() {
          * la reconexion se iba a minutos. No es un numero de manual, es lo que
          * hizo falta.
          */
+        /**
+         * Cuanto se sigue escuchando al GPS tras apagarse el motor.
+         *
+         * Ni corto ni largo por gusto: un semaforo largo o repostar no deben
+         * soltar el receptor —reengancharlo en frio tarda y esos metros se
+         * pierden— pero un carro aparcado no tiene por que calentar el radio
+         * toda la tarde para acumular cero kilometros.
+         */
+        private const val MS_GRACIA_GPS = 10 * 60_000L
+
         private const val MS_SOLTAR_ADAPTADOR = 6_000L
 
         private const val NOTIF_PRESION_BASE = 100
