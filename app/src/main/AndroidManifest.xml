@@ -44,6 +44,17 @@
          nadie revisa si hay actualizacion hasta que alguien toque el icono. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+        Sin esto, `setFullScreenIntent` se cae EN SILENCIO desde Android 10:
+        la llamada no falla, la notificacion sale, suena — y `dumpsys` dice
+        `fullscreenIntent=null`. Asi se descubrio, disparando la alerta de
+        prueba con el dueño al lado del radio.
+
+        El efecto: el aviso de llanta pinchada sonaba pero NO se apoderaba de
+        la pantalla. Yendo en el reproductor de musica, un pinchazo salia como
+        una tira arriba en vez de a pantalla completa.
+    -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <!-- Para armar el APK confirmador. Nivel "signature": solo funciona
