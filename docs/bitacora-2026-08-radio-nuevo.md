@@ -2,6 +2,11 @@
 
 _2026-08-27/28 · rama `descubrimiento-ble-usb` · v7.5 (versionCode 79) · 131 pruebas verdes_
 
+> **Continua en [bitacora-2026-08-tablero-completo.md](bitacora-2026-08-tablero-completo.md)**,
+> que cubre lo funcional: que mide el tablero, de donde sale cada numero, el
+> modulo de averias y la limpieza de 2.594 lineas de codigo muerto. Esta de
+> aqui es la del **hardware y el acceso** al radio.
+
 El head unit viejo murió con el táctil roto y se compró otro. Esta sesión va
 entera sobre el nuevo: cómo se entra, qué hardware suyo sirve y cuál no, y por
 qué la arquitectura acabó siendo **mitad radio interna, mitad dongle**.
