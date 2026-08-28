@@ -10,6 +10,7 @@ import android.util.AttributeSet
 import android.view.View
 import com.nonosky.s2000dash.ConnectionState
 import com.nonosky.s2000dash.EngineConstants
+import com.nonosky.s2000dash.Termometro
 import com.nonosky.s2000dash.VehicleState
 import com.nonosky.s2000dash.bateria.BateriaState
 import com.nonosky.s2000dash.bateria.EnlaceBateria
@@ -147,6 +148,59 @@ class DashView @JvmOverloads constructor(
         trazoPaint.strokeWidth = h * 0.004f
         canvas.drawLine(col, h * 0.06f, col, h * 0.94f, trazoPaint)
         canvas.drawLine(col * 2f, h * 0.06f, col * 2f, h * 0.94f, trazoPaint)
+
+        dibujarSaludDelRadio(canvas, w, h)
+    }
+
+    /**
+     * La temperatura del propio radio, en la franja de abajo.
+     *
+     * No es un dato del carro, por eso vive fuera de las tres columnas y en
+     * pequeño. Pero vive SIEMPRE en pantalla, y por una razon concreta: este
+     * head unit ya se apago dos veces por calor, y en el radio nuevo el
+     * guardian puede quedarse **ciego** porque no hay ninguna zona termica
+     * legible. Cuando eso pasa, el unico termometro que queda es el dueño
+     * mirando — asi que hay que darle algo que mirar, y decirle claramente
+     * cuando nadie mas esta vigilando.
+     *
+     * Sigue la regla del resto del tablero: callado mientras todo va bien,
+     * y grita al salirse de rango.
+     */
+    private fun dibujarSaludDelRadio(canvas: Canvas, w: Float, h: Float) {
+        labelPaint.textAlign = Paint.Align.CENTER
+        labelPaint.textSize = h * 0.040f
+
+        val texto: String
+        val color: Int
+        when {
+            Termometro.ciego -> {
+                // En ambar y con todas las letras: no es un detalle tecnico,
+                // es el aviso de que la proteccion automatica no esta puesta.
+                texto = "RADIO — SIN TERMOMETRO, VIGILA TU"
+                color = COLOR_AMBER
+            }
+            Termometro.gradosC > 0 -> {
+                texto = "RADIO  ${Termometro.gradosC} °C"
+                color = when (Termometro.nivel) {
+                    Termometro.Nivel.Caliente -> COLOR_REDLINE
+                    Termometro.Nivel.Tibio -> COLOR_AMBER
+                    Termometro.Nivel.Fresco -> COLOR_TEXT_DIM
+                }
+            }
+            else -> {
+                // Hay fuente pero no da grados: el sistema solo opina por
+                // niveles. Se dice tal cual en vez de inventar un numero.
+                texto = "RADIO — ${Termometro.nivel.name.uppercase()}"
+                color = when (Termometro.nivel) {
+                    Termometro.Nivel.Caliente -> COLOR_REDLINE
+                    Termometro.Nivel.Tibio -> COLOR_AMBER
+                    Termometro.Nivel.Fresco -> COLOR_TEXT_DIM
+                }
+            }
+        }
+
+        labelPaint.color = color
+        canvas.drawText(texto, w * 0.5f, h * 0.985f, labelPaint)
     }
 
     // --- Llantas ------------------------------------------------------------

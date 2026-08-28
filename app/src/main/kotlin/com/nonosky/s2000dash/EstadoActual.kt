@@ -101,6 +101,15 @@ object EstadoActual {
     @Volatile
     var listarUsb: (() -> List<String>)? = null
 
+    /** Abre una pantalla del sistema por intent. No necesita accesibilidad. */
+    var abrirAjustes: ((String?, String?) -> List<String>)? = null
+
+    /** Interruptores del sistema: ADB, desarrollador, accesibilidad. */
+    var interruptores: (() -> List<String>)? = null
+
+    /** Quien declara poder dibujar por encima de todo. */
+    var listarOverlays: (() -> List<String>)? = null
+
     /**
      * El lector del TPMS, vivo mientras viva el servicio.
      *

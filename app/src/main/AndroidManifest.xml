@@ -45,6 +45,12 @@
          porque ambos APK llevan el mismo certificado. -->
     <uses-permission android:name="com.nonosky.s2000dash.permission.ARMAR" />
 
+    <!-- Para poder LISTAR quien declara dibujar encima. Desde Android 11
+         la lista de paquetes viene filtrada y sin esto el culpable del
+         overlay es invisible. APK de fuera de la tienda: no hay politica de
+         Play que lo impida. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
     <queries>
         <package android:name="com.nonosky.s2000dash.confirmador" />
     </queries>

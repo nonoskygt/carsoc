@@ -52,6 +52,10 @@ class DashService : Service() {
         super.onCreate()
         arrancarEnPrimerPlano()
 
+        // Antes que nada: sin contexto, el termometro se queda solo con
+        // sysfs, que es justo lo que este radio no deja leer.
+        Termometro.iniciar(applicationContext)
+
         puente = DebugServer(
             stateProvider = { EstadoActual.ultimo },
             viewProvider = { EstadoActual.vista },
@@ -106,6 +110,13 @@ class DashService : Service() {
         EstadoActual.listarUsb = {
             Descubridor.listarUsb(ctx)
         }
+        // Estos dos son la salida de la pescadilla del overlay: dicen quien
+        // tapa la pantalla y abren donde se le quita el permiso, sin
+        // depender del confirmador — que es justo lo que no se puede
+        // encender mientras el overlay siga puesto.
+        EstadoActual.abrirAjustes = { que, paquete -> Ajustes.abrir(ctx, que, paquete) }
+        EstadoActual.interruptores = { Ajustes.interruptores(ctx) }
+        EstadoActual.listarOverlays = { Ajustes.overlays(ctx) }
         EstadoActual.volcarUsbSerial = { baudios, segundos ->
             Descubridor.volcarUsbSerial(ctx, baudios, segundos)
         }

@@ -357,6 +357,32 @@ class DebugServer(
                 }
                 "/termica" -> sendText(out, 200, "text/plain",
                     com.nonosky.s2000dash.Termometro.diagnostico().joinToString(SALTO))
+                // Zona por zona, con lo crudo. Es lo unico que distingue
+                // "no existe" de "SELinux lo niega" de "contesta basura",
+                // y cada caso se arregla distinto.
+                "/zonas" -> sendText(out, 200, "text/plain",
+                    com.nonosky.s2000dash.Termometro.zonas().joinToString(SALTO))
+                // Frecuencia y gobernador por nucleo: distingue "la app
+                // calienta el radio" de "la ROM tiene el reloj clavado".
+                "/cpu" -> sendText(out, 200, "text/plain",
+                    com.nonosky.s2000dash.Termometro.cpu().joinToString(SALTO))
+                "/interruptores" -> {
+                    val lista = runCatching { EstadoActual.interruptores?.invoke() }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro los interruptores")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/ajustes" -> {
+                    val lista = runCatching {
+                        EstadoActual.abrirAjustes?.invoke(consulta["que"], consulta["paquete"])
+                    }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro la apertura de ajustes")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/overlays" -> {
+                    val lista = runCatching { EstadoActual.listarOverlays?.invoke() }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro el listado de overlays")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
                 "/tpms" -> sendText(out, 200, "text/plain", tpmsTexto())
                 "/bateria" -> {
                     val v = EstadoActual.vigilanteBateria
