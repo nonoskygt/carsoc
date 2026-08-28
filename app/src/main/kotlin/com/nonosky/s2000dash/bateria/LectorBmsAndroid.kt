@@ -84,6 +84,8 @@ object LectorBmsAndroid {
          * hay algo que investigar.
          */
         sondas: Boolean = false,
+        /** Pedir MTU grande. Apagado: en este radio deja el ATT inservible. */
+        pedirMtu: Boolean = false,
     ): LectorBmsGatt.Lectura {
         val traza = mutableListOf<String>()
         val problemas = mutableListOf<String>()
@@ -253,11 +255,19 @@ object LectorBmsAndroid {
                 )
             }
 
-            // Mas MTU = menos notificaciones partidas. Si lo niega, da
-            // igual: el ensamblador junta los trozos. Pero se ESPERA, porque
-            // dejarlo en vuelo bloquea la escritura del CCCD que viene ahora.
-            runCatching { gatt.requestMtu(64) }
-            mtuListo.await(3_000, TimeUnit.MILLISECONDS)
+            // SIN peticion de MTU, y esto no es un descuido.
+            //
+            // El descubrimiento de servicios funciona, y eso exige mucho
+            // trafico ATT ENTRANTE — o sea que la recepcion no esta rota. Lo
+            // que fallaba venia despues: ni notificaciones ni lecturas. Entre
+            // medias solo habia una operacion, el intercambio de MTU, que en
+            // este controlador deja el canal ATT inservible aunque conteste
+            // status=0. El ensamblador ya sabe juntar respuestas partidas, asi
+            // que el MTU por omision no cuesta nada.
+            if (pedirMtu) {
+                runCatching { gatt.requestMtu(64) }
+                mtuListo.await(3_000, TimeUnit.MILLISECONDS)
+            }
 
             if (!activarNotificaciones(gatt, notifica, traza, problemas)) {
                 return LectorBmsGatt.Lectura(problemas = problemas, traza = traza)
