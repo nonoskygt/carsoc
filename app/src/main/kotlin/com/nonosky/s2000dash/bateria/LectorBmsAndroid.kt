@@ -76,6 +76,14 @@ object LectorBmsAndroid {
         adaptador: BluetoothAdapter?,
         mac: String,
         pedirCeldas: Boolean = true,
+        /**
+         * Sondas de diagnostico. APAGADAS por omision, y con motivo: una
+         * lectura que expira deja la operacion en vuelo y la cola de GATT
+         * rechaza TODO lo que venga detras — o sea que la sonda tumbaba la
+         * peticion que venia a ayudar a depurar. Se enciende a mano cuando
+         * hay algo que investigar.
+         */
+        sondas: Boolean = false,
     ): LectorBmsGatt.Lectura {
         val traza = mutableListOf<String>()
         val problemas = mutableListOf<String>()
@@ -92,6 +100,7 @@ object LectorBmsAndroid {
         val listoNotificar = CountDownLatch(1)
         val mtuListo = CountDownLatch(1)
         val escrito = LinkedBlockingQueue<Int>()
+        val leido = LinkedBlockingQueue<Pair<Int, ByteArray>>()
 
         val muerto = AtomicBoolean(false)
         var gatt: BluetoothGatt? = null
@@ -146,6 +155,13 @@ object LectorBmsAndroid {
                     traza += "MTU acordado=$mtu status=$status"
                     mtuListo.countDown()
                 }
+            }
+
+            @Suppress("DEPRECATION")
+            override fun onCharacteristicRead(
+                g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int,
+            ) {
+                runCatching { leido.offer(status to (c.value ?: ByteArray(0))) }
             }
 
             @Suppress("DEPRECATION")
@@ -234,6 +250,23 @@ object LectorBmsAndroid {
             // a la activacion de notificaciones.
             runCatching { Thread.sleep(400) }
 
+            // SONDA: leer ff01 directamente, y de control el nombre del
+            // aparato (2a00, del servicio generico 1800).
+            //
+            // Es la prueba que separa dos causas que dan el mismo sintoma. Si
+            // ff01 se deja leer, el BMS esta despierto y atendiendo, y lo roto
+            // es la entrega de notificaciones. Si no, el BMS no esta contestando
+            // a nadie y no hay codigo que lo arregle. La lectura de control dice
+            // si el camino de lectura funciona siquiera.
+            //
+            // El CONTROL va primero, y esto importa: una lectura que no
+            // completa deja la operacion en vuelo y la cola de GATT rechaza
+            // todo lo que venga detras. Sondeando ff01 primero, su atasco
+            // hacia fallar al control y a las peticiones, y el resultado no
+            // distinguia nada. Primero se pregunta algo que TIENE que
+            // contestar; solo si eso contesta tiene sentido probar ff01.
+            if (sondas) sondearTodo(gatt, notifica, leido, traza)
+
             val ensamblador = EnsambladorBms()
             val sueltas = mutableListOf<BmsJbd.Respuesta>()
 
@@ -272,6 +305,58 @@ object LectorBmsAndroid {
             runCatching { gatt?.disconnect() }
             runCatching { gatt?.close() }
         }
+    }
+
+    /**
+     * Las dos sondas, en el orden que si distingue algo.
+     *
+     * El CONTROL va primero: `2a00` es el nombre del aparato en el servicio
+     * generico, la lectura mas basica de BLE y la que TODO periferico
+     * contesta. Si eso no contesta, el aparato esta mudo a nivel ATT y
+     * probar `ff01` no aporta nada — solo atasca la cola.
+     */
+    private fun sondearTodo(
+        gatt: BluetoothGatt,
+        notifica: BluetoothGattCharacteristic,
+        leido: LinkedBlockingQueue<Pair<Int, ByteArray>>,
+        traza: MutableList<String>,
+    ) {
+        val control = runCatching {
+            gatt.getService(UUID.fromString("00001800-0000-1000-8000-00805f9b34fb"))
+                ?.getCharacteristic(UUID.fromString("00002a00-0000-1000-8000-00805f9b34fb"))
+        }.getOrNull()
+        val contesta = if (control == null) {
+            traza += "sonda de control: el aparato no publica 2a00"
+            true
+        } else {
+            sondear(gatt, control, leido, "2a00 (nombre)", traza)
+        }
+        if (contesta) sondear(gatt, notifica, leido, "ff01", traza)
+        else traza += "el aparato no contesta ni su nombre: esta mudo a nivel ATT"
+    }
+
+    /** Lee una caracteristica y apunta lo que salga. Solo diagnostico. */
+    @Suppress("DEPRECATION")
+    private fun sondear(
+        gatt: BluetoothGatt,
+        c: BluetoothGattCharacteristic,
+        leido: LinkedBlockingQueue<Pair<Int, ByteArray>>,
+        nombre: String,
+        traza: MutableList<String>,
+    ): Boolean {
+        leido.clear()
+        if (!gatt.readCharacteristic(c)) {
+            traza += "sonda $nombre: readCharacteristic devolvio false"
+            return false
+        }
+        val r = leido.poll(3_000, TimeUnit.MILLISECONDS)
+        if (r == null) {
+            traza += "sonda $nombre: sin respuesta en 3 s"
+            return false
+        }
+        traza += "sonda $nombre: status=${r.first} ${r.second.size} bytes " +
+            r.second.joinToString("") { "%02X".format(it) }
+        return true
     }
 
     @Suppress("DEPRECATION")

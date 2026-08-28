@@ -144,7 +144,9 @@ class DashService : Service() {
         // fallaba, y apagarlo quitaba justo la ruta con la que se mira. Una
         // herramienta de diagnostico no puede depender de lo que diagnostica.
         EstadoActual.leerBmsAhora = { mac ->
-            val lectura = LectorBmsAndroid.leer(ctx, radioInterna, mac)
+            // Con sondas: esta ruta es para depurar, y ahi si compensa pagar
+            // el atasco de cola a cambio de saber si el aparato contesta algo.
+            val lectura = LectorBmsAndroid.leer(ctx, radioInterna, mac, sondas = true)
             lectura.traza + lectura.problemas +
                 listOfNotNull(
                     lectura.basico?.let { "BASICO: $it" },
