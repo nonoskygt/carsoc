@@ -107,6 +107,12 @@ object EstadoActual {
     /** Interruptores del sistema: ADB, desarrollador, accesibilidad. */
     var interruptores: (() -> List<String>)? = null
 
+    /**
+     * Suelta la radio Bluetooth entera. Lo llama el boton de cerrar del
+     * tablero, para que Android Auto la reciba libre.
+     */
+    var soltarBluetooth: (() -> String)? = null
+
     /** Quien declara poder dibujar por encima de todo. */
     var listarOverlays: (() -> List<String>)? = null
 
@@ -150,6 +156,15 @@ object EstadoActual {
      */
     @Volatile
     var probarObdHci: ((String) -> List<String>)? = null
+
+    /**
+     * Lo mismo pero por el Bluetooth INTERNO del radio (RFCOMM/SPP).
+     *
+     * Existe porque el head unit nuevo trae una pila que si funciona: empareja
+     * de verdad (BOND_BONDED) donde el viejo moria en BOND_NONE. Si el enlace
+     * clasico habla ELM327, el dongle USB deja de ser obligatorio.
+     */
+    var probarSpp: ((String) -> List<String>)? = null
 
     /** La pantalla se registra aqui para repintar cuando llega dato del motor. */
     @Volatile

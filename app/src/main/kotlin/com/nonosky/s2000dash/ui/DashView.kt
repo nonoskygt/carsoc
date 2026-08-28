@@ -45,6 +45,20 @@ class DashView @JvmOverloads constructor(
 
     // --- Estado -------------------------------------------------------------
 
+    /**
+     * Que hacer cuando se pulsa la X. Lo pone la Activity.
+     *
+     * La vista no cierra nada por su cuenta ni sabe que es el Bluetooth: solo
+     * avisa. Quien decide que se suelta es el servicio, que es el que lo tomo.
+     */
+    var alCerrar: (() -> Unit)? = null
+
+    /** Donde quedo dibujado el boton, para poder acertarle. */
+    private val cajaCerrar = RectF()
+
+    /** El dedo esta encima de la X esperando a que se cumpla el medio segundo. */
+    private var cerrando = false
+
     private var state = VehicleState()
     private var tpms = EstadoTpms()
     private var enlaceTpms: EnlaceTpms = EnlaceTpms.SinReceptor
@@ -150,6 +164,91 @@ class DashView @JvmOverloads constructor(
         canvas.drawLine(col * 2f, h * 0.06f, col * 2f, h * 0.94f, trazoPaint)
 
         dibujarSaludDelRadio(canvas, w, h)
+        dibujarCerrar(canvas, w, h)
+    }
+
+    /**
+     * El boton de cerrar, arriba a la derecha.
+     *
+     * Existe porque el tablero se queda con la radio Bluetooth mientras esta
+     * abierto —sondeo OBD y BMS— y el dueño necesita poder devolversela a
+     * Android Auto sin desinstalar nada ni reiniciar el radio.
+     *
+     * Va arriba a la derecha y no en el centro por una razon practica: es la
+     * esquina mas lejos de donde cae la mano al alcanzar la pantalla desde el
+     * asiento, y esto NO es un boton que uno quiera pulsar sin querer a media
+     * curva. Por eso tambien se pide una pulsacion larga y no un toque.
+     */
+    private fun dibujarCerrar(canvas: Canvas, w: Float, h: Float) {
+        val lado = h * 0.13f
+        val margen = h * 0.03f
+        cajaCerrar.set(w - margen - lado, margen, w - margen, margen + lado)
+
+        trazoPaint.color = if (cerrando) COLOR_REDLINE else COLOR_SILUETA
+        trazoPaint.strokeWidth = h * 0.008f
+        canvas.drawRoundRect(cajaCerrar, lado * 0.25f, lado * 0.25f, trazoPaint)
+
+        // La X, dos trazos. Se dibuja en vez de usar una fuente porque una
+        // aspa tipografica cambia de tamaño y de centro entre ROMs.
+        val d = lado * 0.28f
+        val cx = cajaCerrar.centerX()
+        val cy = cajaCerrar.centerY()
+        trazoPaint.color = if (cerrando) COLOR_REDLINE else COLOR_TEXT_DIM
+        trazoPaint.strokeWidth = h * 0.012f
+        canvas.drawLine(cx - d, cy - d, cx + d, cy + d, trazoPaint)
+        canvas.drawLine(cx + d, cy - d, cx - d, cy + d, trazoPaint)
+    }
+
+    /**
+     * Pulsacion LARGA para cerrar, no un toque.
+     *
+     * Un toque suelto cerraria el tablero de un manotazo involuntario
+     * manejando, y recuperarlo exige soltar el volante y buscar un icono. El
+     * medio segundo de mas es barato; el susto no.
+     */
+    @Suppress("ClickableViewAccessibility")
+    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                if (!cajaCerrar.contains(event.x, event.y)) return false
+                cerrando = true
+                invalidate()
+                postDelayed(confirmarCierre, MS_PULSACION_LARGA)
+                return true
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                // Si el dedo se sale de la caja, ya no cuenta.
+                if (cerrando && !cajaCerrar.contains(event.x, event.y)) cancelarCierre()
+                return cerrando
+            }
+            android.view.MotionEvent.ACTION_UP,
+            android.view.MotionEvent.ACTION_CANCEL -> {
+                val estaba = cerrando
+                cancelarCierre()
+                return estaba
+            }
+        }
+        return false
+    }
+
+    private fun cancelarCierre() {
+        if (!cerrando) return
+        cerrando = false
+        removeCallbacks(confirmarCierre)
+        invalidate()
+    }
+
+    private val confirmarCierre = Runnable {
+        if (!cerrando) return@Runnable
+        cerrando = false
+        invalidate()
+        performClick()
+        runCatching { alCerrar?.invoke() }
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
     }
 
     /**
@@ -718,6 +817,9 @@ class DashView @JvmOverloads constructor(
         const val COLOR_REDLINE = 0xFFFF3B30.toInt()
         const val COLOR_VTEC_ON = 0xFF00C2FF.toInt()
         const val COLOR_COLD = 0xFF3D8BFF.toInt()
+
+        /** Lo que hay que sostener la X para que el tablero se cierre. */
+        const val MS_PULSACION_LARGA = 600L
 
         /**
          * 200 ms entre cuadros: 5 por segundo.

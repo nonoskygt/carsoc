@@ -366,6 +366,19 @@ class DebugServer(
                 // calienta el radio" de "la ROM tiene el reloj clavado".
                 "/cpu" -> sendText(out, 200, "text/plain",
                     com.nonosky.s2000dash.Termometro.cpu().joinToString(SALTO))
+                "/obd-spp" -> {
+                    // El mismo dialogo AT que /obd-hci, pero por la radio
+                    // interna del head unit en vez del dongle USB.
+                    val mac = consulta["mac"] ?: com.nonosky.s2000dash.DashService.MAC_OBD
+                    val lista = runCatching { EstadoActual.probarSpp?.invoke(mac) }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro la prueba SPP")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
+                "/soltar-bt" -> {
+                    val r = runCatching { EstadoActual.soltarBluetooth?.invoke() }
+                        .getOrNull() ?: "el servicio no registro soltarBluetooth"
+                    sendText(out, 200, "text/plain", r)
+                }
                 "/interruptores" -> {
                     val lista = runCatching { EstadoActual.interruptores?.invoke() }
                         .getOrNull() ?: listOf("ERROR: el servicio no registro los interruptores")
@@ -692,7 +705,7 @@ class DebugServer(
         /** Las que hacen radio o USB y pueden tardar de verdad. */
         val RUTAS_LENTAS = setOf(
             "/buscar", "/emparejar", "/ble", "/gatt", "/hci", "/hci-ble",
-            "/serial", "/bateria-gatt", "/obd-hci", "/update",
+            "/serial", "/bateria-gatt", "/obd-hci", "/obd-spp", "/update",
             "/instalar-companero", "/pantalla", "/apps",
         )
         val HELP = """

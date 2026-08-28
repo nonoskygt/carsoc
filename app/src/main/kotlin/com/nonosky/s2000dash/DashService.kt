@@ -19,6 +19,12 @@ import com.nonosky.s2000dash.descubrimiento.Descubridor
 import com.nonosky.s2000dash.hci.SondaHci
 import com.nonosky.s2000dash.tpms.TpmsReader
 import com.nonosky.s2000dash.selfupdate.UpdateChecker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlin.concurrent.thread
 
 /**
@@ -37,6 +43,19 @@ class DashService : Service() {
     private var lectorTpms: TpmsReader? = null
     private var vigilante: VigilanteBateria? = null
     private var lectorObd: com.nonosky.s2000dash.obd.LectorObdHci? = null
+
+    /** El sondeo por la radio INTERNA del head unit (RFCOMM/SPP). */
+    private var sondeoInterno: com.nonosky.s2000dash.obd.PollScheduler? = null
+    private var alcanceInterno: CoroutineScope? = null
+    private var enlaceInterno: Job? = null
+
+    /** La radio del propio head unit. Null si este aparato no trae. */
+    private val radioInterna: android.bluetooth.BluetoothAdapter? by lazy {
+        runCatching {
+            (getSystemService(Context.BLUETOOTH_SERVICE)
+                as? android.bluetooth.BluetoothManager)?.adapter
+        }.getOrNull()
+    }
     private val actualizador by lazy { UpdateChecker(applicationContext) }
 
     @Volatile
@@ -116,6 +135,7 @@ class DashService : Service() {
         // encender mientras el overlay siga puesto.
         EstadoActual.abrirAjustes = { que, paquete -> Ajustes.abrir(ctx, que, paquete) }
         EstadoActual.interruptores = { Ajustes.interruptores(ctx) }
+        EstadoActual.soltarBluetooth = { soltarBluetooth() }
         EstadoActual.listarOverlays = { Ajustes.overlays(ctx) }
         EstadoActual.volcarUsbSerial = { baudios, segundos ->
             Descubridor.volcarUsbSerial(ctx, baudios, segundos)
@@ -138,6 +158,35 @@ class DashService : Service() {
                         .putExtra("d", d)
                 )
             }.onFailure { Log.w(TAG, "no se pudo mandar '$comando': ${it.message}") }
+        }
+        EstadoActual.probarSpp = { mac ->
+            val salida = mutableListOf<String>()
+            val dev = runCatching { adapter?.getRemoteDevice(mac) }.getOrNull()
+            if (adapter == null) salida += "ERROR: este radio no expone BluetoothAdapter"
+            else if (dev == null) salida += "ERROR: no se pudo resolver $mac"
+            else {
+                salida += "vinculo actual: ${runCatching { dev.bondState }.getOrNull()} (12=vinculado)"
+                // El descubrimiento activo mata el throughput de RFCOMM, y
+                // SppTransport ya lo cancela, pero si el dongle esta dentro
+                // del ELM327 no hay nada que hacer: solo atiende a uno.
+                val t = com.nonosky.s2000dash.obd.SppTransport(dev, adapter)
+                try {
+                    t.connect()
+                    salida += "socket RFCOMM abierto: ${t.isConnected}"
+                    val sesion = com.nonosky.s2000dash.obd.Elm327Session(t)
+                    val info = sesion.initialize()
+                    salida += "ATDP dijo: ${info.describedAs} (fallback=${info.usedFallback})"
+                    salida += "voltaje del adaptador: ${sesion.readVoltage() ?: "n/d"}"
+                    salida += "RPM crudo: ${sesion.queryRaw("010C") ?: "sin respuesta"}"
+                    salida += "agua crudo: ${sesion.queryRaw("0105") ?: "sin respuesta"}"
+                    salida += "admision crudo: ${sesion.queryRaw("010B") ?: "sin respuesta"}"
+                } catch (e: Exception) {
+                    salida += "ERROR: ${e.javaClass.simpleName}: ${e.message}"
+                } finally {
+                    runCatching { t.close() }
+                }
+            }
+            salida
         }
         EstadoActual.probarObdHci = { mac ->
             val salida = mutableListOf<String>()
@@ -245,6 +294,101 @@ class DashService : Service() {
      * adaptador Steren al dongle y provocaba el PAGE TIMEOUT. Todo el
      * Bluetooth del tablero pasa ahora por el dongle USB.
      */
+    /**
+     * Sondea el motor por el Bluetooth INTERNO del radio.
+     *
+     * El head unit viejo no podia: emparejaba y moria en `BOND_NONE`, y las
+     * cuatro vias de RFCOMM fallaban igual. Por eso se escribio toda la pila
+     * HCI sobre el dongle USB. Este radio SI puede —empareja a `BOND_BONDED`,
+     * abre el socket, y el ELM327 contesta `ISO 9141-2`— asi que el dongle
+     * deja de ser obligatorio.
+     *
+     * Solo puede correr UNO de los dos lectores. [com.nonosky.s2000dash.obd.PollScheduler]
+     * y [com.nonosky.s2000dash.obd.LectorObdHci] escriben los dos en
+     * `EstadoActual.ultimo`, y cuando convivieron el interno pisaba al del
+     * dongle con `Disconnected` porque el Steren solo le contestaba a uno.
+     * Por eso arrancar este apaga aquel, y no al reves.
+     */
+    private fun arrancarObdInterno() {
+        runCatching {
+            val adapter = radioInterna ?: run {
+                Log.w(TAG, "este radio no expone BluetoothAdapter")
+                return
+            }
+            runCatching { lectorObd?.detener() }
+            lectorObd = null
+            EstadoActual.lectorObd = null
+
+            val dev = adapter.getRemoteDevice(MAC_OBD)
+            val alcance = CoroutineScope(Dispatchers.IO + SupervisorJob())
+            val sched = com.nonosky.s2000dash.obd.PollScheduler(
+                transportFactory = {
+                    com.nonosky.s2000dash.obd.SppTransport(dev, adapter)
+                },
+                scope = alcance,
+            )
+            alcanceInterno = alcance
+            sondeoInterno = sched
+            sched.start()
+
+            // Publicar su estado donde lo ven la vista y el puente. Sin esto
+            // el sondeo corre y nadie se entera: el tablero se queda en
+            // guiones y parece que no hay enlace.
+            enlaceInterno = alcance.launch {
+                sched.state.collect { st ->
+                    EstadoActual.ultimo = st
+                    runCatching { EstadoActual.alCambiarObd?.invoke() }
+                }
+            }
+        }.onFailure { Log.w(TAG, "el sondeo interno no arranco: ${it.message}") }
+    }
+
+    /**
+     * Suelta la radio Bluetooth entera y la deja libre para Android Auto.
+     *
+     * Es lo que pidio el dueño al elegir "solo interno": el tablero toma la
+     * radio mientras esta abierto y la devuelve al cerrarse, en vez de
+     * pelearsela al telefono todo el tiempo. Un controlador puede con las dos
+     * cosas a la vez, pero el sondeo OBD es charlatan y degradaria el audio.
+     * Asi que no se comparte: se turna.
+     *
+     * NO apaga el TPMS —va por USB, no por radio— ni el puente HTTP, que no
+     * usa Bluetooth. El radio sigue siendo alcanzable y sigue avisando de una
+     * llanta baja con el tablero cerrado, que es justo cuando importa.
+     */
+    fun soltarBluetooth(): String {
+        val partes = mutableListOf<String>()
+
+        if (sondeoInterno != null) partes += "sondeo interno detenido"
+        runCatching { enlaceInterno?.cancel() }
+        runCatching { sondeoInterno?.stop() }
+        runCatching { alcanceInterno?.cancel() }
+        enlaceInterno = null
+        sondeoInterno = null
+        alcanceInterno = null
+
+        if (lectorObd != null) partes += "lector del dongle detenido"
+        runCatching { lectorObd?.detener() }
+        lectorObd = null
+        EstadoActual.lectorObd = null
+        EstadoActual.comandoObd = null
+
+        if (vigilante != null) partes += "vigilante de bateria detenido"
+        runCatching { vigilante?.detener() }
+        vigilante = null
+        EstadoActual.vigilanteBateria = null
+
+        // Que el tablero no deje colgados los ultimos valores como si el
+        // enlace siguiera vivo: un dato viejo sin avisar enseña a no creerle
+        // al tablero, que es el unico pecado que no se puede cometer aqui.
+        EstadoActual.ultimo = VehicleState()
+        runCatching { EstadoActual.alCambiarObd?.invoke() }
+
+        if (partes.isEmpty()) partes += "no habia nada tomando la radio"
+        partes += "Bluetooth libre"
+        return partes.joinToString(" | ")
+    }
+
     private fun arrancarObd() {
         runCatching {
             val l = com.nonosky.s2000dash.obd.LectorObdHci(applicationContext, MAC_OBD)
@@ -319,14 +463,30 @@ class DashService : Service() {
         EstadoActual.encenderFuente = { cual, encender ->
             runCatching {
                 when (cual.lowercase()) {
+                    // Por omision, la radio INTERNA. El dongle queda como
+                    // "motor-dongle" para poder volver a el sin recompilar.
                     "motor", "obd" -> if (encender) {
-                        if (lectorObd == null) arrancarObd() else "el motor ya estaba encendido"
-                        "motor encendido"
+                        if (sondeoInterno == null) arrancarObdInterno()
+                        "motor encendido por la radio interna"
+                    } else {
+                        runCatching { enlaceInterno?.cancel() }
+                        runCatching { sondeoInterno?.stop() }
+                        runCatching { alcanceInterno?.cancel() }
+                        enlaceInterno = null
+                        sondeoInterno = null
+                        alcanceInterno = null
+                        EstadoActual.ultimo = VehicleState()
+                        runCatching { EstadoActual.alCambiarObd?.invoke() }
+                        "motor apagado"
+                    }
+                    "motor-dongle" -> if (encender) {
+                        if (lectorObd == null) arrancarObd() else "el dongle ya estaba encendido"
+                        "motor encendido por el dongle"
                     } else {
                         runCatching { lectorObd?.detener() }
                         lectorObd = null
                         EstadoActual.lectorObd = null
-                        "motor apagado"
+                        "dongle apagado"
                     }
                     "bateria" -> if (encender) {
                         if (vigilante == null) arrancarBateria() else "la bateria ya estaba encendida"
@@ -337,7 +497,8 @@ class DashService : Service() {
                         EstadoActual.vigilanteBateria = null
                         "bateria apagada"
                     }
-                    else -> "fuente desconocida: $cual (usa motor o bateria)"
+                    else -> "fuente desconocida: $cual " +
+                        "(usa motor, motor-dongle o bateria)"
                 }
             }.getOrElse { "ERROR: ${it.message}" }
         }
@@ -351,6 +512,9 @@ class DashService : Service() {
 
     override fun onDestroy() {
         vivo = false
+        runCatching { enlaceInterno?.cancel() }
+        runCatching { sondeoInterno?.stop() }
+        runCatching { alcanceInterno?.cancel() }
         runCatching { lectorObd?.detener() }
         lectorObd = null
         EstadoActual.lectorObd = null

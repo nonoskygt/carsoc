@@ -99,25 +99,38 @@ class DashActivity : ComponentActivity() {
         // recoge el estado del servicio. Se hace asi, y no sondeando, porque
         // las tramas llegan cuando llegan y un sondeo o llega tarde o gasta
         // CPU preguntando por nada.
+        // LOS TRES SON HERMANOS, y esto no es cosmetico.
+        //
+        // Estaban anidados uno dentro de otro: el de bateria se asignaba
+        // DENTRO del cuerpo del de TPMS, y el del motor DENTRO del de
+        // bateria. O sea que el motor solo quedaba cableado si antes llegaba
+        // una trama de TPMS y ademas un evento de bateria. Con la bateria
+        // apagada —que es el caso normal sin dongle— el gancho del motor no
+        // se registraba NUNCA: el servicio sondeaba y contestaba `Polling`
+        // por el puente mientras la pantalla seguia diciendo "sin enlace".
+        // Un tablero que no pinta lo que ya sabe es peor que uno vacio.
         EstadoActual.alCambiarTpms = {
             runOnUiThread {
                 EstadoActual.lectorTpms?.let { dashView.setTpms(it.estado(), it.enlace) }
+            }
+        }
 
         EstadoActual.alCambiarBateria = {
             runOnUiThread {
                 EstadoActual.vigilanteBateria?.let { dashView.setBateria(it.estado) }
+            }
+        }
 
-        // El motor ahora lo sondea el servicio por el dongle, no la Activity
-        // por la pila de Android — que esta apagada a proposito.
+        // El motor lo sondea el servicio —ahora por la radio interna del
+        // radio— y la vista solo recoge lo que el servicio publica.
         EstadoActual.alCambiarObd = {
             runOnUiThread { dashView.setState(EstadoActual.ultimo) }
         }
-            }
-        }
+
+        // Primer pintado con lo que ya hubiera, sin esperar a que algo cambie.
         EstadoActual.vigilanteBateria?.let { dashView.setBateria(it.estado) }
-            }
-        }
         EstadoActual.lectorTpms?.let { dashView.setTpms(it.estado(), it.enlace) }
+        dashView.setState(EstadoActual.ultimo)
 
         // Ganchos para poder configurar el adaptador en remoto por el
         // puente, sin ir al carro a tocar el selector.
@@ -132,9 +145,15 @@ class DashActivity : ComponentActivity() {
 
         DashService.arrancar(this)
 
-        // El Steren se habla solo por el dongle. Que no quede rastro suyo en
-        // la radio del carro, que sigue haciendo falta para Android Auto.
-        soltarObdDeLaRadio()
+        // YA NO se desvincula el Steren al abrir.
+        //
+        // Se hacia porque el OBD iba por el dongle y la pila de Android
+        // intentaba tomar el mismo ELM327 por su cuenta; el adaptador solo
+        // atiende a uno y se peleaban. Ahora el OBD va JUSTO por esa pila, asi
+        // que desvincularlo aqui borraria el vinculo en cada apertura y el
+        // sondeo no volveria a conectar nunca. La radio se le devuelve a
+        // Android Auto al CERRAR, que es cuando toca.
+        dashView.alCerrar = { cerrarYSoltarRadio() }
 
         // Ya no hay selector de adaptador en pantalla. Abria un barrido y
         // un createBond de la pila de Android, que es exactamente lo que hay
@@ -487,6 +506,23 @@ class DashActivity : ComponentActivity() {
      * Android intentaba tomarlo por su cuenta y peleaba con el dongle por el
      * mismo ELM327 — y el ELM327 solo atiende a uno.
      */
+    /**
+     * Cierra el tablero y le devuelve la radio Bluetooth al telefono.
+     *
+     * No mata el servicio a proposito: el TPMS va por USB y sigue vigilando
+     * las llantas, y el puente HTTP sigue en pie para poder actualizar y
+     * diagnosticar en remoto. Lo unico que se suelta es la radio.
+     */
+    private fun cerrarYSoltarRadio() {
+        val r = runCatching { EstadoActual.soltarBluetooth?.invoke() }
+            .getOrNull() ?: "el servicio no registro soltarBluetooth"
+        android.util.Log.i("DashActivity", "cerrando: $r")
+        runCatching {
+            android.widget.Toast.makeText(this, r, android.widget.Toast.LENGTH_LONG).show()
+        }
+        finish()
+    }
+
     private fun soltarObdDeLaRadio() {
         runCatching {
             val r = desvincular(DashService.MAC_OBD)
