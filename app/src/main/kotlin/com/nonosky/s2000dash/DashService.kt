@@ -1031,6 +1031,31 @@ class DashService : Service() {
      * escribiendo. O sea que la pila de Android llega al BMS igual que
      * llegaba el dongle, y ademas hace el descubrimiento y el MTU por dentro.
      */
+    /**
+     * Suelta el vigilante y DESCABLEA los dos caminos.
+     *
+     * Los dos hace falta. Cada camino deja cableado lo suyo —el interno pone
+     * `LectorBmsDirecto`, el del dongle pone `CanalGattDisponible.fabrica`— y
+     * si se cambia de uno a otro sin borrar el anterior, la primera ronda del
+     * vigilante nuevo se va por el camino viejo y publica un fallo que no es
+     * suyo.
+     */
+    private fun pararVigilante() {
+        runCatching { vigilante?.detener() }
+        vigilante = null
+        EstadoActual.vigilanteBateria = null
+        EstadoActual.leerBmsAhora = null
+        LectorBmsDirecto.leer = null
+        LectorBmsDirecto.barrer = null
+        com.nonosky.s2000dash.bateria.CanalGattDisponible.fabrica = null
+    }
+
+    /** ¿Hay un dongle Bluetooth colgado del USB ahora mismo? */
+    private fun hayDongle(): Boolean = runCatching {
+        val um = getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+        um != null && com.nonosky.s2000dash.hci.HciUsb.buscarDongle(um) != null
+    }.getOrDefault(false)
+
     private fun arrancarBateriaInterna() {
         runCatching {
             val ctx = applicationContext
@@ -1332,7 +1357,13 @@ class DashService : Service() {
                         if (bateriaDeseada && vigilante == null &&
                             Termometro.permiteBateria()
                         ) {
-                            arrancarBateriaInterna()
+                            // Con el dongle puesto, por el dongle. El BLE de
+                            // este radio no ha recibido UN SOLO anuncio en
+                            // toda su vida —esta medido y escrito en la
+                            // bitacora— asi que arrancar el camino interno
+                            // teniendo dongle es garantizar que la bateria no
+                            // se lea nunca.
+                            if (hayDongle()) arrancarBateria() else arrancarBateriaInterna()
                         }
                     }
                 }
@@ -1387,7 +1418,12 @@ class DashService : Service() {
                     // Por omision, la radio INTERNA, igual que el motor.
                     "bateria" -> if (encender) {
                         bateriaDeseada = true
-                        if (vigilante == null) arrancarBateriaInterna()
+                        // Se para SIEMPRE antes de arrancar. Antes se hacia
+                        // `if (vigilante == null)`, asi que pedir el otro
+                        // camino con uno ya corriendo no hacia nada — y aun
+                        // asi contestaba que lo habia encendido.
+                        pararVigilante()
+                        arrancarBateriaInterna()
                         "bateria encendida por la radio interna"
                     } else {
                         bateriaDeseada = false
@@ -1399,9 +1435,12 @@ class DashService : Service() {
                         "bateria apagada"
                     }
                     "bateria-dongle" -> if (encender) {
-                        if (vigilante == null) arrancarBateria() else "la bateria ya estaba encendida"
+                        bateriaDeseada = true
+                        pararVigilante()
+                        arrancarBateria()
                         "bateria encendida por el dongle"
                     } else {
+                        bateriaDeseada = false
                         runCatching { vigilante?.detener() }
                         vigilante = null
                         EstadoActual.vigilanteBateria = null
