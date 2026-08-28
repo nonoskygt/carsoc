@@ -57,10 +57,14 @@ object PidDecoder {
     /**
      * Voltaje de la sonda de oxigeno 1, banco 1.
      *
-     * Dos bytes: el voltaje en A (escala 0.005 V) y el trim en B. Es de banda
-     * ESTRECHA en lo que expone este carro, asi que no da un AFR: solo dice de
-     * que lado de la estequiometrica esta. Se usa tal cual, como rica/pobre,
-     * porque convertirlo en un numero de mezcla seria inventarselo.
+     * YA NO SE PIDE. Se conserva la constante porque la prueba del reparto la
+     * usa para verificar que este PID **no** aparece en la tabla de turnos: es
+     * un centinela, no un resto.
+     *
+     * Se dejo de pedir cuando MEZCLA paso a salir de los ajustes de
+     * combustible 0106/0107. La sonda de este carro es de banda ESTRECHA:
+     * su voltaje solo dice de que lado de la estequiometrica esta, y sacarle
+     * un porcentaje seria inventarlo. Los ajustes si son un porcentaje medido.
      */
     const val PID_O2_V = "0114"
 

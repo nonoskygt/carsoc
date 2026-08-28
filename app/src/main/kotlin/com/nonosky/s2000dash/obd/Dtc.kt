@@ -160,6 +160,9 @@ object Dtc {
      */
     fun sinCodigos(crudo: String?): Boolean {
         if (crudo == null) return false
+        // Sin respuesta no se puede afirmar que no haya codigos: solo que no
+        // se sabe. Esta guarda es la que impide el falso "SIN AVERIAS".
+        if (!huboRespuesta(crudo)) return false
         val limpio = crudo.uppercase()
         if (limpio.contains("NO DATA") || limpio.contains("NODATA")) return true
         return leerLista(crudo, Tipo.GUARDADOS).isEmpty() &&
@@ -168,14 +171,44 @@ object Dtc {
     }
 
     /**
-     * ¿La respuesta es un fallo de verdad y no un "no hay nada"?
+     * ¿La ECU llego a CONTESTAR algo?
+     *
+     * Una respuesta de verdad es una linea que empieza por `4` —el modo de
+     * peticion mas 0x40— con al menos un byte detras, o un `NO DATA`
+     * explicito. Todo lo demas es el adaptador hablando solo.
+     *
+     * Esta funcion existe por un fallo que se midio con el carro apagado: al
+     * pedir los PIDs, el ELM327 contesto `SEARCHING...` a secas. Esa palabra
+     * no estaba en ninguna lista de errores y ninguna linea empezaba por
+     * `43`, asi que la lista de codigos salia vacia, nadie detectaba fallo, y
+     * la pantalla habria dicho **SIN AVERIAS**.
+     *
+     * Decirle al dueño que su carro esta sano sin haberle hablado es el peor
+     * fallo posible en una pantalla de averias. Por eso ahora se exige
+     * confirmacion POSITIVA de que hubo respuesta, en vez de dar por sano
+     * todo lo que no suene a error conocido.
+     */
+    fun huboRespuesta(crudo: String?): Boolean {
+        if (crudo.isNullOrBlank()) return false
+        if (crudo.uppercase().replace(" ", "").contains("NODATA")) return true
+        return crudo.lines().any { linea ->
+            val hex = linea.uppercase().filter { it.isDigit() || it in 'A'..'F' }
+            hex.length >= 4 && hex.startsWith("4")
+        }
+    }
+
+    /**
+     * ¿La respuesta es un fallo y no un "no hay nada"?
      *
      * Distinguirlo importa: lo primero es un problema del adaptador que hay
      * que enseñar, lo segundo es la buena noticia de que el carro esta sano.
+     *
+     * Son fallo las dos cosas: un error conocido del bus, **y tambien el
+     * silencio**. Ver [huboRespuesta].
      */
     fun esFalloDeEnlace(crudo: String?): Boolean {
         val t = crudo?.uppercase() ?: return true
-        return t.contains("UNABLE TO CONNECT") ||
+        if (t.contains("UNABLE TO CONNECT") ||
             t.contains("BUS ERROR") ||
             t.contains("CAN ERROR") ||
             t.contains("BUS BUSY") ||
@@ -183,5 +216,7 @@ object Dtc {
             t.contains("DATA ERROR") ||
             t.contains("STOPPED") ||
             t.contains("ERROR")
+        ) return true
+        return !huboRespuesta(crudo)
     }
 }
