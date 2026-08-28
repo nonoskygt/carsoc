@@ -282,18 +282,6 @@ object PidDecoder {
             ?.let { ((it[0].toInt() and 0xFF) / 2) - 64 }
             ?.takeIf { it in -64..64 }
 
-    /**
-     * Voltaje de la sonda, en voltios. Escala 0.005 V por cuenta.
-     *
-     * Una sonda de banda estrecha oscila alrededor de 0.45 V cuando el motor
-     * esta en lazo cerrado: por encima va rica, por debajo pobre. Los
-     * extremos (0.1 y 0.9) son los topes del sensor, no medidas finas.
-     */
-    fun decodeO2Voltaje(raw: String?): Float? =
-        payloadOf(raw, PID_O2_V)?.takeIf { it.isNotEmpty() }
-            ?.let { (it[0].toInt() and 0xFF) * 0.005f }
-            ?.takeIf { it in 0f..1.275f }
-
     fun decodeLoad(raw: String?): Int? {
         val d = payloadOf(raw, PID_LOAD)
         if (d != null && d.isNotEmpty()) return d.u(0) * 100 / 255

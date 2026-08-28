@@ -188,8 +188,6 @@ class LectorObdHci(
             ?.let { s = s.copy(aceleradorPct = it, aceleradorAtMs = ahora) }
         PidDecoder.decodeAvance(sesion.queryRaw(PidDecoder.PID_AVANCE))
             ?.let { s = s.copy(avanceGrados = it, avanceAtMs = ahora) }
-        PidDecoder.decodeO2Voltaje(sesion.queryRaw(PidDecoder.PID_O2_V))
-            ?.let { s = s.copy(o2Voltaje = it, o2AtMs = ahora) }
 
         EstadoActual.ultimo = s
         runCatching { EstadoActual.alCambiarObd?.invoke() }

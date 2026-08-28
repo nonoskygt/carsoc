@@ -65,8 +65,9 @@ data class VehicleState(
     val codigosGuardados: Int = 0,
     val estadoAtMs: Long = 0,
 
-    val o2Voltaje: Float? = null,
-    val o2AtMs: Long = 0,
+    // `o2Voltaje` y `o2AtMs` se fueron con el resto de la cadena del O2:
+    // se escribian en cada ronda y no los leia nadie desde que MEZCLA pasa a
+    // salir de los ajustes de combustible.
     val connection: ConnectionState = ConnectionState.Disconnected,
     val sessionMaxRpm: Int = 0,
     /** Lo que reporto `ATDP`, para mostrar que se negocio de verdad. */

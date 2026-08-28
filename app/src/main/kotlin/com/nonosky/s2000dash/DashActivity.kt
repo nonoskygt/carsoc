@@ -43,11 +43,8 @@ import kotlinx.coroutines.launch
 class DashActivity : ComponentActivity() {
 
     private lateinit var dashView: DashView
-    private var scheduler: PollScheduler? = null
-    private var observeJob: Job? = null
 
     private var pairing: ObdPairing? = null
-    private var pickerDialog: AlertDialog? = null
 
     private val updater by lazy { UpdateChecker(applicationContext) }
     private val revisoActualizacion = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -71,12 +68,10 @@ class DashActivity : ComponentActivity() {
         }
     }
 
-    /** Ubicacion: en API 30 y menores, sin ella el barrido no devuelve nada. */
-    private val requestScanPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) pairing?.scan() else toast(getString(R.string.needs_location_scan))
-    }
+    // El permiso de ubicacion ya no se pide desde aqui: lo lanzaba beginScan,
+    // que se fue con el selector. Hoy el barrido se dispara por el puente
+    // (/buscar) y el permiso se concede una vez desde los ajustes del radio,
+    // que es donde el dueño ya lo tiene puesto.
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -267,11 +262,8 @@ class DashActivity : ComponentActivity() {
         // seguira contestando el estado; solo dejara de haber captura, que
         // es la verdad: sin pantalla no hay nada que fotografiar.
         if (EstadoActual.vista === dashView) EstadoActual.vista = null
-        pickerDialog?.dismiss()
-        pickerDialog = null
         pairing?.stop()
         pairing = null
-        scheduler?.stop()
         super.onDestroy()
     }
 
@@ -556,150 +548,27 @@ class DashActivity : ComponentActivity() {
         prefs.edit().remove(KEY_DEVICE).apply()
         chosen = null
         EstadoActual.adaptadorElegido = null
-        runOnUiThread {
-            scheduler?.stop()
-            publicarEstado(ConnectionState.SinAdaptador)
-        }
+        runOnUiThread { publicarEstado(ConnectionState.SinAdaptador) }
     }
 
-    /** Refleja en el tablero un estado que no viene del scheduler. */
+    /** Refleja en el tablero un estado que no viene del sondeo. */
     private fun publicarEstado(estado: ConnectionState) {
-        val nuevo = (scheduler?.state?.value ?: EstadoActual.ultimo).copy(connection = estado)
+        val nuevo = EstadoActual.ultimo.copy(connection = estado)
         EstadoActual.ultimo = nuevo
         dashView.setState(nuevo)
     }
 
-    @SuppressLint("MissingPermission")
-    private fun savedDevice(adapter: BluetoothAdapter): BluetoothDevice? {
-        val mac = prefs.getString(KEY_DEVICE, null) ?: return null
-        return runCatching { adapter.getRemoteDevice(mac) }.getOrNull()
-    }
-
-    // --- Elegir y emparejar el adaptador ------------------------------------
-
-    @SuppressLint("MissingPermission")
-    private fun showPicker() {
-        val adapter = bluetoothAdapter ?: return
-        if (!adapter.isEnabled) {
-            toast(getString(R.string.enable_bluetooth))
-            return
-        }
-        pickerDialog?.dismiss()
-
-        val shown = mutableListOf<BluetoothDevice>()
-        val names = ArrayAdapter<String>(this, android.R.layout.simple_list_item_1)
-
-        val p = pairing ?: ObdPairing(this, adapter).also { pairing = it }
-        p.start(object : ObdPairing.Listener {
-            override fun onDevices(devices: List<BluetoothDevice>) {
-                shown.clear()
-                shown += devices
-                names.clear()
-                names.addAll(devices.map { d -> label(d) })
-                names.notifyDataSetChanged()
-            }
-
-            override fun onBonded(device: BluetoothDevice) {
-                prefs.edit().putString(KEY_DEVICE, device.address).apply()
-                chosen = device
-                pickerDialog?.dismiss()
-                pickerDialog = null
-                p.stop()
-                toast(getString(R.string.paired_with, device.name ?: device.address))
-                beginPolling(device)
-            }
-
-            override fun onBondFailed(device: BluetoothDevice) {
-                toast(getString(R.string.pair_failed))
-            }
-
-            override fun onScanFinished() {
-                if (shown.isEmpty()) toast(getString(R.string.nothing_found))
-            }
-        })
-
-        pickerDialog = AlertDialog.Builder(this)
-            .setTitle(R.string.choose_adapter)
-            .setAdapter(names) { _, i -> shown.getOrNull(i)?.let { p.bond(it) } }
-            .setNeutralButton(R.string.scan) { _, _ -> beginScan() }
-            .setNegativeButton(android.R.string.cancel, null)
-            .setOnDismissListener {
-                goImmersive()
-                // Soltar el receptor de emparejamiento: dejarlo vivo hacia
-                // que cualquier dispositivo que se emparejara despues se
-                // tomara por el adaptador OBD.
-                if (chosen == null) {
-                    p.stop()
-                    publicarEstado(ConnectionState.SinAdaptador)
-                }
-            }
-            .create()
-            .also { it.show() }
-
-        // Arrancar el barrido de una: si el adaptador no esta emparejado,
-        // la lista sale vacia y esperar a que toquen "Buscar" es un paso de mas.
-        beginScan()
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun label(d: BluetoothDevice): String {
-        val name = runCatching { d.name }.getOrNull() ?: "(sin nombre)"
-        val bonded = d.bondState == BluetoothDevice.BOND_BONDED
-        val mark = if (ObdPairing.looksLikeObd(d)) "★ " else ""
-        val estado = if (bonded) getString(R.string.bonded) else getString(R.string.tap_to_pair)
-        return "$mark$name\n${d.address}  ·  $estado"
-    }
-
-    private fun beginScan() {
-        // En API 30 y menores el barrido de Bluetooth exige ubicacion fina;
-        // sin ella startDiscovery no devuelve nada y parece que no hay nadie.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            val granted = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                requestScanPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-                return
-            }
-        }
-        pairing?.scan()
-    }
-
-    // --- Sondeo -------------------------------------------------------------
-
-    @SuppressLint("MissingPermission")
-    private fun beginPolling(device: BluetoothDevice) {
-        EstadoActual.adaptadorElegido =
-            "${runCatching { device.name }.getOrNull() ?: "?"} (${device.address})"
-        scheduler?.stop()
-        val adapter = bluetoothAdapter
-        val fresh = PollScheduler(
-            transportFactory = { SppTransport(device, adapter) },
-            scope = lifecycleScope,
-        )
-        scheduler = fresh
-        fresh.start()
-        observe(fresh)
-    }
-
-    /**
-     * Se reengancha al scheduler que este vivo. Cancelar el anterior importa:
-     * al cambiar de adaptador la vista se quedaria escuchando al scheduler
-     * viejo, ya detenido, y el tablero se congelaria sin decir por que.
-     */
-    private fun observe(target: PollScheduler) {
-        observeJob?.cancel()
-        observeJob = lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                target.state.collect {
-                    dashView.setState(it)
-                    // Publicarlo para que el puente lo vea aunque esta
-                    // pantalla se destruya despues.
-                    EstadoActual.ultimo = it
-                }
-            }
-        }
-    }
+    // Aqui vivia el SELECTOR DE ADAPTADOR: savedDevice, showPicker,
+    // label, beginScan, beginPolling y observe. Unas 130 lineas que
+    // sondeaban el OBD desde la pantalla, con su dialogo de eleccion y
+    // su propio PollScheduler.
+    //
+    // Quedaron huerfanas al mover el motor al servicio: showPicker era la
+    // raiz y no la llamaba nadie desde que se quito el selector, asi que
+    // todo el racimo se referenciaba solo a si mismo y se compilaba para
+    // nada. Elegir y emparejar el adaptador se hace hoy por el puente
+    // (/adaptadores, /buscar, /emparejar, /elegir), que no obliga a nadie
+    // a tocar una pantalla dentro del carro.
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
 

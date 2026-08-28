@@ -1154,13 +1154,6 @@ class DashView @JvmOverloads constructor(
         else -> COLOR_GREEN
     }
 
-    private fun colorO2(v: Float?, stale: Boolean): Int = when {
-        v == null || stale -> COLOR_STALE
-        v <= 0.20f -> if (parpadeo()) COLOR_REDLINE else COLOR_AMBER
-        v >= 0.70f -> COLOR_AMBER
-        else -> COLOR_GREEN
-    }
-
     /**
      * Color del voltaje del alternador.
      *

@@ -201,9 +201,6 @@ class PollScheduler(
             PidDecoder.PID_AVANCE -> PidDecoder.decodeAvance(raw)?.also { v ->
                 _state.update { it.copy(avanceGrados = v, avanceAtMs = now) }
             }
-            PidDecoder.PID_O2_V -> PidDecoder.decodeO2Voltaje(raw)?.also { v ->
-                _state.update { it.copy(o2Voltaje = v, o2AtMs = now) }
-            }
             PidDecoder.PID_TRIM_CORTO -> PidDecoder.decodeTrim(raw, pid)?.also { v ->
                 _state.update { it.copy(trimCortoPct = v, trimCortoAtMs = now) }
             }
@@ -288,7 +285,16 @@ class PollScheduler(
         // porque el pie ya sabe donde esta. Sus seis turnos vuelven al
         // presupuesto y el RPM sube de 6,0 a 7,1 Hz.
         private val AVANCE_SLOTS = listOf(6, 20, 39, 51)             // 4
-        private val O2_SLOTS = listOf(16, 30, 47, 57)                // 4
+        // Aqui vivian los 4 turnos del O2 (PID 0114). Se van y NO se
+        // reparten: menos trafico en la K-line significa que el resto de
+        // lecturas llegan antes, y el RPM sube de 6,0 a 6,7 Hz.
+        //
+        // El voltaje de la sonda dejo de pintarse cuando MEZCLA paso a salir
+        // de los ajustes de combustible 0106/0107, que si son un porcentaje
+        // medido. Desde entonces se le preguntaba a la ECU cuatro veces por
+        // periodo para tirar la respuesta. Y una sonda que se muere ya la
+        // delatan los ajustes —se disparan— y el modulo de averias, que trae
+        // P0131 a P0135 y P1163 a P1167 con su explicacion.
 
         // Los ajustes de combustible y la luz de averia: los cinco turnos
         // que quedaban del presupuesto (S llega justo a 40, RPM a 6,0 Hz).
@@ -309,7 +315,6 @@ class PollScheduler(
             VOLTAGE_SLOTS.forEach { t[it] = PID_VOLTAGE }
             MAP_SLOTS.forEach { t[it] = PidDecoder.PID_MAP }
             AVANCE_SLOTS.forEach { t[it] = PidDecoder.PID_AVANCE }
-            O2_SLOTS.forEach { t[it] = PidDecoder.PID_O2_V }
             TRIM_CORTO_SLOTS.forEach { t[it] = PidDecoder.PID_TRIM_CORTO }
             TRIM_LARGO_SLOTS.forEach { t[it] = PidDecoder.PID_TRIM_LARGO }
             ESTADO_SLOTS.forEach { t[it] = PidDecoder.PID_ESTADO }
