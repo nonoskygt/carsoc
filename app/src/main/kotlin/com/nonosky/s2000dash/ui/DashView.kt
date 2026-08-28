@@ -300,6 +300,97 @@ class DashView @JvmOverloads constructor(
 
         labelPaint.color = color
         canvas.drawText(texto, w * 0.5f, h * 0.985f, labelPaint)
+
+        dibujarAjusteCombustible(canvas, w, h)
+        dibujarEstadoEnlaces(canvas, w, h)
+    }
+
+    /**
+     * UN solo sitio para el estado de los tres enlaces, abajo a la derecha.
+     *
+     * Los titulos de las columnas cambiaban de texto con cada transicion y el
+     * resultado era un tablero inquieto: carteles moviendose encima de
+     * numeros que estaban parados. El dueño pidio lo contrario — titulos
+     * quietos, valores vivos.
+     *
+     * Asi que el estado se junta aqui, y **solo aparece lo que NO va bien**.
+     * Con las tres fuentes leyendo, esta linea esta vacia y el tablero entero
+     * se queda callado. Es la misma regla del resto: callado mientras todo
+     * va bien, y habla al salirse de rango.
+     */
+    private fun dibujarEstadoEnlaces(canvas: Canvas, w: Float, h: Float) {
+        val partes = mutableListOf<String>()
+
+        when (state.connection) {
+            ConnectionState.Polling -> {}
+            ConnectionState.Initializing -> partes += "OBD iniciando"
+            ConnectionState.Connecting -> partes += "OBD conectando"
+            ConnectionState.SinAdaptador -> partes += "OBD sin adaptador"
+            ConnectionState.BluetoothApagado -> partes += "Bluetooth apagado"
+            ConnectionState.Disconnected -> partes += "OBD sin enlace"
+        }
+
+        when (bateria.enlace) {
+            EnlaceBateria.Leyendo -> {}
+            EnlaceBateria.SinDongle -> partes += "BMS sin dongle"
+            EnlaceBateria.DongleMudo -> partes += "BMS dongle mudo"
+            EnlaceBateria.Buscando -> partes += "BMS buscando"
+            EnlaceBateria.Detectada -> partes += "BMS sin leer"
+            EnlaceBateria.Fallo -> partes += "BMS fallo"
+        }
+
+        when (enlaceTpms) {
+            EnlaceTpms.Leyendo -> if (tpms.ruedas.isEmpty()) partes += "TPMS sin sensores"
+            EnlaceTpms.SinReceptor -> partes += "TPMS sin receptor"
+            EnlaceTpms.SinPermiso -> partes += "TPMS sin permiso"
+            EnlaceTpms.Abriendo -> partes += "TPMS abriendo"
+            EnlaceTpms.Fallo -> partes += "TPMS no responde"
+        }
+
+        if (partes.isEmpty()) return
+
+        labelPaint.textAlign = Paint.Align.RIGHT
+        labelPaint.textSize = h * 0.040f
+        labelPaint.color = COLOR_TEXT_DIM
+        canvas.drawText(partes.joinToString("  ·  "), w * 0.988f, h * 0.985f, labelPaint)
+        labelPaint.textAlign = Paint.Align.CENTER
+    }
+
+    /**
+     * Los dos ajustes de combustible, abajo a la izquierda.
+     *
+     * Es el dato mas valioso que da esta ECU y el que nadie mira, porque
+     * delata la averia ANTES de que encienda la luz: una fuga de vacio o un
+     * inyector sucio empujan la correccion arriba mucho antes de que la
+     * centralita se rinda y guarde un codigo.
+     *
+     * Se pintan los DOS —corto y largo— y no su suma, porque dicen cosas
+     * distintas: el corto es lo que la sonda esta corrigiendo ahora mismo y
+     * oscila; el largo es lo que la centralita ya dio por aprendido. Un
+     * largo grande con un corto tranquilo es un problema viejo y asentado.
+     *
+     * Cero es perfecto. Se pinta tranquilo hasta el 10%, ambar hasta el 25 y
+     * rojo por encima, que es donde la centralita se queda sin margen.
+     */
+    private fun dibujarAjusteCombustible(canvas: Canvas, w: Float, h: Float) {
+        val corto = state.trimCortoPct
+        val largo = state.trimLargoPct
+        if (corto == null && largo == null) return
+
+        labelPaint.textAlign = Paint.Align.LEFT
+        labelPaint.textSize = h * 0.040f
+        labelPaint.color = colorTrim(maxOf(kotlin.math.abs(corto ?: 0), kotlin.math.abs(largo ?: 0)))
+        val c = corto?.let { "%+d".format(it) } ?: "--"
+        val l = largo?.let { "%+d".format(it) } ?: "--"
+        canvas.drawText("AJUSTE  $c / $l %", w * 0.012f, h * 0.985f, labelPaint)
+        labelPaint.textAlign = Paint.Align.CENTER
+    }
+
+    /** Hasta 10% es normal; 25% es el limite practico de la centralita. */
+    private fun colorTrim(magnitud: Int): Int = when {
+        magnitud >= 25 -> COLOR_REDLINE
+        magnitud >= 10 -> COLOR_AMBER
+        else -> COLOR_TEXT_DIM
     }
 
     // --- Llantas ------------------------------------------------------------
@@ -356,15 +447,20 @@ class DashView @JvmOverloads constructor(
      * desconectado seria mentir por omision: los cuatro valores viejos
      * seguirian ahi, y nada avisaria de que ya no son de ahora.
      */
-    private fun tituloLlantas(ahora: Long): String = when (enlaceTpms) {
-        EnlaceTpms.SinReceptor -> "LLANTAS — sin receptor USB"
-        EnlaceTpms.SinPermiso -> "LLANTAS — sin permiso USB"
-        EnlaceTpms.Abriendo -> "LLANTAS — conectando receptor"
-        EnlaceTpms.Leyendo ->
-            if (tpms.ruedas.isEmpty()) "LLANTAS — esperando sensores"
-            else "LLANTAS · psi (placa ${Escalas.PSI_PLACA.toInt()})"
-        EnlaceTpms.Fallo -> "LLANTAS — el receptor no responde"
-    }
+    /**
+     * FIJO. El estado del enlace no vive aqui.
+     *
+     * Antes este titulo cambiaba de texto con cada transicion del receptor
+     * —"sin receptor", "conectando", "esperando sensores", "psi (placa 32)"—
+     * y con el enlace inestable eso es un cartel bailando encima de unos
+     * numeros que si estan quietos. El dueño lo pidio claro: que solo se
+     * actualicen los valores.
+     *
+     * Cuando no hay datos, las celdas ya dicen "sin sensor" y el porque vive
+     * en la linea de estado de abajo, en UN solo sitio.
+     */
+    private fun tituloLlantas(ahora: Long): String =
+        "LLANTAS · psi (placa ${Escalas.PSI_PLACA.toInt()})"
 
     /**
      * Una esquina: presion grande, temperatura pequeña.
@@ -553,15 +649,8 @@ class DashView @JvmOverloads constructor(
         else -> COLOR_TEXT
     }
 
-    private fun tituloBateria(ahora: Long): String = when (bateria.enlace) {
-        EnlaceBateria.SinDongle -> "BATERIA — sin dongle USB"
-        EnlaceBateria.DongleMudo -> "BATERIA — el dongle no contesta"
-        EnlaceBateria.Buscando -> "BATERIA — buscando"
-        EnlaceBateria.Detectada ->
-            if (bateria.rancia(ahora)) "BATERIA — se dejo de oir" else "BATERIA DE LITIO"
-        EnlaceBateria.Leyendo -> "BATERIA DE LITIO · en linea"
-        EnlaceBateria.Fallo -> "BATERIA — fallo el dongle"
-    }
+    /** FIJO, por la misma razon que el de las llantas. */
+    private fun tituloBateria(ahora: Long): String = "BATERIA DE LITIO"
 
     /**
      * Explica POR QUE no hay voltaje, en vez de dejar los guiones mudos.
@@ -571,7 +660,10 @@ class DashView @JvmOverloads constructor(
      * soluciones completamente distintas.
      */
     private fun pieBateria(): String {
-        if (!bateria.detectada()) return bateria.detalle ?: "no localizada"
+        // El motivo del fallo NO va aqui: se solapaba con el titulo de las
+        // llantas y ademas cambiaba de texto solo. Vive en la linea de estado
+        // de abajo, que es un sitio fijo y no pisa a nadie.
+        if (!bateria.detectada()) return "sin datos"
         if (bateria.voltaje != null) {
             val celdas = bateria.celdas.size
             return if (celdas > 0) "$celdas celdas · ${bateria.nombre ?: "BMS"}"
@@ -646,9 +738,16 @@ class DashView @JvmOverloads constructor(
             state.avanceGrados?.let { "$it °" } ?: "-- °",
             if (state.isStale(state.avanceAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
 
-        filaGrande(canvas, x0, x1, h * 0.95f, h, "VELOCIDAD",
-            state.speedKmh?.let { "$it" } ?: "--",
-            if (state.isStale(state.speedAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
+        // CARGA en vez de VELOCIDAD.
+        //
+        // La velocidad se quito por peticion del dueño —el carro ya la tiene
+        // en el cuadro original, y repetirla gastaba un tercio del
+        // presupuesto de la K-line en un dato duplicado—. En su sitio va la
+        // carga calculada, que no esta en ningun otro reloj del carro y
+        // ademas es la que decide si el VTEC cuenta como enganchado.
+        filaGrande(canvas, x0, x1, h * 0.95f, h, "CARGA",
+            state.loadPct?.let { "$it %" } ?: "-- %",
+            if (state.isStale(state.loadAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
     }
 
     // --- Motor --------------------------------------------------------------
@@ -669,7 +768,15 @@ class DashView @JvmOverloads constructor(
         labelPaint.textAlign = Paint.Align.CENTER
         labelPaint.color = COLOR_TEXT_DIM
         labelPaint.textSize = h * 0.055f
+        // Rojo fijo, NO parpadeando. Un titulo que titila es ruido; el color
+        // ya dice todo lo que hay que decir y se queda quieto.
+        labelPaint.color = when {
+            state.milEncendida -> COLOR_REDLINE
+            state.codigosGuardados > 0 -> COLOR_AMBER
+            else -> COLOR_TEXT_DIM
+        }
         canvas.drawText(tituloMotor(), left + ancho * 0.5f, h * 0.10f, labelPaint)
+        labelPaint.color = COLOR_TEXT_DIM
 
         // El agua va SIN barra y con el numero coloreado, por peticion del
         // dueño. Una barra obliga a estimar la posicion y ademas ocupa sitio;
@@ -793,14 +900,18 @@ class DashView @JvmOverloads constructor(
     }
 
     /** El estado del OBD, que ya no ocupa una insignia aparte. */
-    private fun tituloMotor(): String = when (state.connection) {
-        ConnectionState.Polling -> "MOTOR · " + (state.protocol?.take(18) ?: "en linea")
-        ConnectionState.Initializing -> "MOTOR — iniciando"
-        ConnectionState.Connecting -> "MOTOR — conectando"
-        ConnectionState.SinAdaptador -> "MOTOR — sin adaptador"
-        ConnectionState.BluetoothApagado -> "MOTOR — Bluetooth apagado"
-        ConnectionState.Disconnected -> "MOTOR — sin enlace"
-    }
+    /**
+     * FIJO — salvo por una cosa que SI merece salirse: una averia guardada.
+     *
+     * El protocolo, el "conectando" y el "sin enlace" se fueron a la linea de
+     * estado de abajo. Un codigo de averia se queda: no es estado del enlace,
+     * es estado del CARRO, y es lo primero que hay que ver al mirar esta
+     * columna. Ademas no oscila — o hay codigo o no lo hay.
+     */
+    private fun tituloMotor(): String =
+        if (state.milEncendida || state.codigosGuardados > 0) {
+            "MOTOR · AVERIA (${state.codigosGuardados})"
+        } else "MOTOR"
 
     /** Etiqueta a la izquierda, valor a la derecha, en la misma linea. */
     private fun fila(

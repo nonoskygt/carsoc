@@ -180,6 +180,42 @@ class DashService : Service() {
                 )
             }.onFailure { Log.w(TAG, "no se pudo mandar '$comando': ${it.message}") }
         }
+        EstadoActual.pidsSoportados = {
+            val salida = mutableListOf<String>()
+            val adapter = radioInterna
+            val dev = runCatching { adapter?.getRemoteDevice(MAC_OBD) }.getOrNull()
+            if (dev == null) salida += "ERROR: no se pudo resolver el adaptador"
+            else {
+                val t = com.nonosky.s2000dash.obd.SppTransport(dev, adapter)
+                try {
+                    t.connect()
+                    val sesion = com.nonosky.s2000dash.obd.Elm327Session(t)
+                    sesion.initialize()
+                    var base = 0x00
+                    var vueltas = 0
+                    while (vueltas < 4) {
+                        val cmd = "01%02X".format(base)
+                        val raw = sesion.queryRaw(cmd)
+                        salida += "--- $cmd -> ${raw ?: "sin respuesta"}"
+                        val lista = com.nonosky.s2000dash.obd.PidDecoder.soportados(raw, base)
+                        if (lista.isEmpty()) break
+                        for (pid in lista) {
+                            if (pid % 0x20 == 0) continue  // el indice del bloque siguiente
+                            val n = com.nonosky.s2000dash.obd.PidDecoder.NOMBRES[pid]
+                            salida += "  01%02X  %s".format(pid, n ?: "(sin nombre conocido)")
+                        }
+                        if (!com.nonosky.s2000dash.obd.PidDecoder.hayMasBloques(raw, base)) break
+                        base += 0x20
+                        vueltas++
+                    }
+                } catch (e: Exception) {
+                    salida += "ERROR: ${e.javaClass.simpleName}: ${e.message}"
+                } finally {
+                    runCatching { t.close() }
+                }
+            }
+            salida
+        }
         EstadoActual.probarSpp = { mac ->
             val salida = mutableListOf<String>()
             val dev = runCatching { adapter?.getRemoteDevice(mac) }.getOrNull()
@@ -201,6 +237,13 @@ class DashService : Service() {
                     salida += "RPM crudo: ${sesion.queryRaw("010C") ?: "sin respuesta"}"
                     salida += "agua crudo: ${sesion.queryRaw("0105") ?: "sin respuesta"}"
                     salida += "admision crudo: ${sesion.queryRaw("010B") ?: "sin respuesta"}"
+                    // Los que se resisten, en crudo: si la ECU los declara
+                    // soportados en el 0100 y aun asi no llegan, la respuesta
+                    // literal es lo unico que distingue "no contesta" de
+                    // "contesta algo que el decodificador rechaza".
+                    for (p in listOf("0104", "0106", "0107", "0101", "0111", "010E")) {
+                        salida += "$p crudo: ${sesion.queryRaw(p) ?: "sin respuesta"}"
+                    }
                 } catch (e: Exception) {
                     salida += "ERROR: ${e.javaClass.simpleName}: ${e.message}"
                 } finally {

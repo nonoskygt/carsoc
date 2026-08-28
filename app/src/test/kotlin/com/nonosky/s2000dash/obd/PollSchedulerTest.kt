@@ -3,6 +3,7 @@ package com.nonosky.s2000dash.obd
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,9 +24,11 @@ class PollSchedulerTest {
     fun `las proporciones sobre un periodo completo son las de la seccion 5`() {
         val c = countsOver(PollScheduler.Plan.PERIOD)
 
-        // Velocidad cada 3 ciclos -> 20 de 60
-        assertEquals(20, c[PidDecoder.PID_SPEED])
-        // Carga cada 10 -> 6 de 60
+        // La velocidad ya NO se pide: la tiene el cuadro original del carro
+        // y gastaba un tercio del presupuesto en un dato duplicado.
+        assertNull(c[PidDecoder.PID_SPEED])
+
+        // Carga cada 10 -> 6 de 60. Sostiene ademas la deteccion del VTEC.
         assertEquals(6, c[PidDecoder.PID_LOAD])
         // Refrigerante cada 20 -> 3 de 60
         assertEquals(3, c[PidDecoder.PID_COOLANT])
@@ -33,6 +36,17 @@ class PollSchedulerTest {
         assertEquals(3, c[PidDecoder.PID_IAT])
         // Voltaje cada 20 -> 3 de 60
         assertEquals(3, c[PollScheduler.PID_VOLTAGE])
+
+        // La columna de ADMISION, pagada con los turnos de la velocidad.
+        assertEquals(6, c[PidDecoder.PID_MAP])
+        assertEquals(6, c[PidDecoder.PID_ACELERADOR])
+        assertEquals(4, c[PidDecoder.PID_AVANCE])
+        assertEquals(4, c[PidDecoder.PID_O2_V])
+
+        // Los ajustes de combustible y la luz de averia.
+        assertEquals(2, c[PidDecoder.PID_TRIM_CORTO])
+        assertEquals(2, c[PidDecoder.PID_TRIM_LARGO])
+        assertEquals(1, c[PidDecoder.PID_ESTADO])
     }
 
     @Test
@@ -41,7 +55,11 @@ class PollSchedulerTest {
         // atrapa que un slot pise a otro al editar las listas.
         val c = countsOver(PollScheduler.Plan.PERIOD)
         val asignados = c.filterKeys { it != null }.values.sum()
-        assertEquals(20 + 6 + 3 + 3 + 3, asignados)
+        // La velocidad se fue (eran 20) y sus turnos pagaron la ADMISION.
+        // 6 carga + 3 agua + 3 aire + 3 voltaje
+        // + 6 colector + 6 acelerador + 4 avance + 4 mezcla
+        // + 2 ajuste corto + 2 ajuste largo + 1 estado
+        assertEquals(6 + 3 + 3 + 3 + 6 + 6 + 4 + 4 + 2 + 2 + 1, asignados)
     }
 
     @Test

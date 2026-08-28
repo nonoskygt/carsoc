@@ -53,6 +53,17 @@ data class VehicleState(
     val avanceGrados: Int? = null,
     val avanceAtMs: Long = 0,
     /** Voltaje de la sonda de oxigeno. Banda estrecha: solo rica/pobre. */
+    /** Ajustes de combustible. Cero es perfecto; el signo dice hacia donde. */
+    val trimCortoPct: Int? = null,
+    val trimCortoAtMs: Long = 0,
+    val trimLargoPct: Int? = null,
+    val trimLargoAtMs: Long = 0,
+
+    /** Luz de averia y codigos guardados, del PID 0101. */
+    val milEncendida: Boolean = false,
+    val codigosGuardados: Int = 0,
+    val estadoAtMs: Long = 0,
+
     val o2Voltaje: Float? = null,
     val o2AtMs: Long = 0,
     val connection: ConnectionState = ConnectionState.Disconnected,

@@ -166,6 +166,9 @@ object EstadoActual {
      */
     var probarSpp: ((String) -> List<String>)? = null
 
+    /** Le pregunta a la ECU que PIDs soporta, en vez de suponerlo. */
+    var pidsSoportados: (() -> List<String>)? = null
+
     /** La pantalla se registra aqui para repintar cuando llega dato del motor. */
     @Volatile
     var alCambiarObd: (() -> Unit)? = null

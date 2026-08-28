@@ -366,6 +366,11 @@ class DebugServer(
                 // calienta el radio" de "la ROM tiene el reloj clavado".
                 "/cpu" -> sendText(out, 200, "text/plain",
                     com.nonosky.s2000dash.Termometro.cpu().joinToString(SALTO))
+                "/pids" -> {
+                    val lista = runCatching { EstadoActual.pidsSoportados?.invoke() }
+                        .getOrNull() ?: listOf("ERROR: el servicio no registro la consulta de PIDs")
+                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                }
                 "/obd-spp" -> {
                     // El mismo dialogo AT que /obd-hci, pero por la radio
                     // interna del head unit en vez del dongle USB.
@@ -705,7 +710,7 @@ class DebugServer(
         /** Las que hacen radio o USB y pueden tardar de verdad. */
         val RUTAS_LENTAS = setOf(
             "/buscar", "/emparejar", "/ble", "/gatt", "/hci", "/hci-ble",
-            "/serial", "/bateria-gatt", "/obd-hci", "/obd-spp", "/update",
+            "/serial", "/bateria-gatt", "/obd-hci", "/obd-spp", "/pids", "/update",
             "/instalar-companero", "/pantalla", "/apps",
         )
         val HELP = """

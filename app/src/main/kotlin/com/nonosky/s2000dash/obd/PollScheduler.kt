@@ -186,6 +186,39 @@ class PollScheduler(
             PidDecoder.PID_IAT -> PidDecoder.decodeIat(raw)?.also { v ->
                 _state.update { it.copy(iatC = v, iatAtMs = now) }
             }
+            // La columna de ADMISION. Estos cuatro tenian campo en
+            // VehicleState, decodificador propio y sitio reservado en la
+            // pantalla desde el principio — pero nadie los pedia, asi que
+            // salian en guiones para siempre. Se vio con el motor andando:
+            // COLECTOR, ACELERADOR y AVANCE vacios mientras una prueba
+            // directa por /obd-spp devolvia 410B55, o sea 85 kPa.
+            PidDecoder.PID_MAP -> PidDecoder.decodeMap(raw)?.also { v ->
+                _state.update { it.copy(mapKpa = v, mapAtMs = now) }
+            }
+            PidDecoder.PID_ACELERADOR -> PidDecoder.decodeAcelerador(raw)?.also { v ->
+                _state.update { it.copy(aceleradorPct = v, aceleradorAtMs = now) }
+            }
+            PidDecoder.PID_AVANCE -> PidDecoder.decodeAvance(raw)?.also { v ->
+                _state.update { it.copy(avanceGrados = v, avanceAtMs = now) }
+            }
+            PidDecoder.PID_O2_V -> PidDecoder.decodeO2Voltaje(raw)?.also { v ->
+                _state.update { it.copy(o2Voltaje = v, o2AtMs = now) }
+            }
+            PidDecoder.PID_TRIM_CORTO -> PidDecoder.decodeTrim(raw, pid)?.also { v ->
+                _state.update { it.copy(trimCortoPct = v, trimCortoAtMs = now) }
+            }
+            PidDecoder.PID_TRIM_LARGO -> PidDecoder.decodeTrim(raw, pid)?.also { v ->
+                _state.update { it.copy(trimLargoPct = v, trimLargoAtMs = now) }
+            }
+            // Devuelve el numero de codigos, no el Pair: todas las ramas de
+            // este `when` tienen que compartir tipo o el `applied != null`
+            // de abajo se queda sin `equals` utilizable.
+            PidDecoder.PID_ESTADO -> PidDecoder.decodeMil(raw)?.let { (mil, n) ->
+                _state.update {
+                    it.copy(milEncendida = mil, codigosGuardados = n, estadoAtMs = now)
+                }
+                n
+            }
             else -> null
         }
 
@@ -220,18 +253,65 @@ class PollScheduler(
     object Plan {
         const val PERIOD = 60
 
-        private val SPEED_SLOTS = (0 until PERIOD step 3).toList()   // 20 -> ~2 Hz
+        // LA VELOCIDAD SE FUE, y con ella 20 de los 35 turnos.
+        //
+        // La quito el dueño: el carro ya la tiene en el cuadro original a la
+        // altura de los ojos, igual que el tacometro, y repetirla aqui gastaba
+        // un tercio del presupuesto entero de la K-line en un dato duplicado.
+        // Esos 20 turnos son los que hacen posible la columna de ADMISION.
         private val LOAD_SLOTS = listOf(1, 11, 22, 31, 41, 52)       // 6  -> ~0.6 Hz
         private val COOLANT_SLOTS = listOf(4, 25, 44)                // 3  -> ~0.3 Hz
         private val IAT_SLOTS = listOf(14, 34, 55)                   // 3, desfasado del agua
         private val VOLTAGE_SLOTS = listOf(8, 28, 49)                // 3, gratis
 
+        // La columna de ADMISION, en huecos que estaban VACIOS.
+        //
+        // Se eligieron turnos libres, sin quitarselos a nadie: de los 60
+        // slots habia 25 sin asignar y aqui se ocupan 16, dejando 9 de
+        // margen. El colector es el que mas se mueve, asi que lleva mas.
+        //
+        // La mezcla va por 0114 —voltaje de sonda de banda estrecha— y no
+        // por 0134: el mapa de PIDs de esta ECU no soporta nada por encima
+        // del 0x20, y pedir el AFR de banda ancha solo gastaba turnos para
+        // recibir vacio.
+        // La columna de ADMISION, pagada con los turnos de la velocidad.
+        //
+        // El presupuesto manda: la K-line va a ~10 lecturas/s y §5 le reserva
+        // al RPM 6 Hz, o sea 600/(60+S) >= 6, o sea S <= 40. Con la velocidad
+        // fuera quedan 15 basicos, asi que hay 25 turnos para repartir y aqui
+        // se usan 20 — el RPM queda en 6,3 Hz y sobra margen.
+        //
+        // El colector y el acelerador se mueven rapido y llevan 6 cada uno
+        // (~0,6 Hz). El avance y la mezcla cambian mas despacio y llevan 4.
+        private val MAP_SLOTS = listOf(0, 9, 18, 27, 36, 45)         // 6
+        private val ACELERADOR_SLOTS = listOf(3, 13, 24, 33, 43, 54) // 6
+        private val AVANCE_SLOTS = listOf(6, 20, 39, 51)             // 4
+        private val O2_SLOTS = listOf(16, 30, 47, 57)                // 4
+
+        // Los ajustes de combustible y la luz de averia: los cinco turnos
+        // que quedaban del presupuesto (S llega justo a 40, RPM a 6,0 Hz).
+        //
+        // Se piden pocas veces a proposito y no es tacañeria: un ajuste de
+        // combustible se mueve en decenas de segundos, no en decimas. Lo que
+        // importa de el es la TENDENCIA — si esta en +2% o en +22% — y para
+        // eso sobra con mirarlo cada diez segundos. La luz de averia cambia
+        // aun menos: un turno basta.
+        private val TRIM_CORTO_SLOTS = listOf(21, 42)                // 2
+        private val TRIM_LARGO_SLOTS = listOf(12, 48)                // 2
+        private val ESTADO_SLOTS = listOf(58)                        // 1
+
         private val table: Array<String?> = arrayOfNulls<String>(PERIOD).also { t ->
-            SPEED_SLOTS.forEach { t[it] = PidDecoder.PID_SPEED }
             LOAD_SLOTS.forEach { t[it] = PidDecoder.PID_LOAD }
             COOLANT_SLOTS.forEach { t[it] = PidDecoder.PID_COOLANT }
             IAT_SLOTS.forEach { t[it] = PidDecoder.PID_IAT }
             VOLTAGE_SLOTS.forEach { t[it] = PID_VOLTAGE }
+            MAP_SLOTS.forEach { t[it] = PidDecoder.PID_MAP }
+            ACELERADOR_SLOTS.forEach { t[it] = PidDecoder.PID_ACELERADOR }
+            AVANCE_SLOTS.forEach { t[it] = PidDecoder.PID_AVANCE }
+            O2_SLOTS.forEach { t[it] = PidDecoder.PID_O2_V }
+            TRIM_CORTO_SLOTS.forEach { t[it] = PidDecoder.PID_TRIM_CORTO }
+            TRIM_LARGO_SLOTS.forEach { t[it] = PidDecoder.PID_TRIM_LARGO }
+            ESTADO_SLOTS.forEach { t[it] = PidDecoder.PID_ESTADO }
         }
 
         fun secondaryFor(cycle: Int): String? = table[Math.floorMod(cycle, PERIOD)]
