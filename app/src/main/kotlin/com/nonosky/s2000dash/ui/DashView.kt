@@ -745,14 +745,33 @@ class DashView @JvmOverloads constructor(
         canvas: Canvas, x0: Float, x1: Float, y: Float, h: Float,
         etiqueta: String, valor: String, color: Int,
     ) {
-        labelPaint.textAlign = Paint.Align.LEFT
-        labelPaint.color = COLOR_TEXT_DIM
-        labelPaint.textSize = h * 0.075f
-        canvas.drawText(etiqueta, x0, y, labelPaint)
-
+        // El VALOR se mide primero, porque es el que manda.
         textPaint.textAlign = Paint.Align.RIGHT
         textPaint.color = color
         textPaint.textSize = h * 0.125f
+        val anchoValor = textPaint.measureText(valor)
+
+        // La etiqueta cede si no cabe; el numero nunca.
+        //
+        // A tamaño fijo, "ALTERNADOR" y "13,0 V" se pisaban uno encima del
+        // otro y la fila quedaba ilegible — justo la que avisa de que el
+        // alternador no esta cargando. El numero es el dato; la palabra solo
+        // dice de que es, asi que encoger la palabra no pierde nada.
+        labelPaint.textAlign = Paint.Align.LEFT
+        labelPaint.color = COLOR_TEXT_DIM
+        labelPaint.textSize = h * 0.075f
+        val disponible = (x1 - anchoValor - h * 0.03f) - x0
+        if (disponible > 0f) {
+            val anchoEtiqueta = labelPaint.measureText(etiqueta)
+            if (anchoEtiqueta > disponible) {
+                // Con suelo: por debajo de esto no se lee de reojo, y una
+                // etiqueta ilegible es tan inutil como una tapada.
+                labelPaint.textSize =
+                    (h * 0.075f * (disponible / anchoEtiqueta)).coerceAtLeast(h * 0.044f)
+            }
+        }
+        canvas.drawText(etiqueta, x0, y, labelPaint)
+
         canvas.drawText(valor, x1, y + h * 0.012f, textPaint)
         textPaint.textAlign = Paint.Align.CENTER
         labelPaint.textAlign = Paint.Align.CENTER

@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.nonosky.s2000dash.bateria.CanalGattDisponible
+import com.nonosky.s2000dash.bateria.LectorBmsAndroid
+import com.nonosky.s2000dash.bateria.LectorBmsDirecto
 import com.nonosky.s2000dash.bateria.LectorBmsGatt
 import com.nonosky.s2000dash.bateria.CanalGattHci
 import com.nonosky.s2000dash.bateria.VigilanteBateria
@@ -136,6 +138,19 @@ class DashService : Service() {
         EstadoActual.abrirAjustes = { que, paquete -> Ajustes.abrir(ctx, que, paquete) }
         EstadoActual.interruptores = { Ajustes.interruptores(ctx) }
         EstadoActual.soltarBluetooth = { soltarBluetooth() }
+
+        // El diagnostico del BMS se registra SIEMPRE, no solo con la bateria
+        // encendida. Hacia falta apagar el vigilante para poder mirar por que
+        // fallaba, y apagarlo quitaba justo la ruta con la que se mira. Una
+        // herramienta de diagnostico no puede depender de lo que diagnostica.
+        EstadoActual.leerBmsAhora = { mac ->
+            val lectura = LectorBmsAndroid.leer(ctx, radioInterna, mac)
+            lectura.traza + lectura.problemas +
+                listOfNotNull(
+                    lectura.basico?.let { "BASICO: $it" },
+                    lectura.celdas?.let { "CELDAS: $it" },
+                )
+        }
         EstadoActual.listarOverlays = { Ajustes.overlays(ctx) }
         EstadoActual.volcarUsbSerial = { baudios, segundos ->
             Descubridor.volcarUsbSerial(ctx, baudios, segundos)
@@ -250,6 +265,44 @@ class DashService : Service() {
      * Arranca la vigilancia de la bateria. Envuelto, como todo lo demas: si
      * el dongle no esta, el resto del tablero sigue en pie.
      */
+    /**
+     * La bateria por la radio INTERNA del radio, sin dongle.
+     *
+     * Se comprobo antes de escribirlo: el volcado GATT por la radio interna
+     * lista el servicio `ff00` del BMS con `ff01` notificando y `ff02`
+     * escribiendo. O sea que la pila de Android llega al BMS igual que
+     * llegaba el dongle, y ademas hace el descubrimiento y el MTU por dentro.
+     */
+    private fun arrancarBateriaInterna() {
+        runCatching {
+            val ctx = applicationContext
+            // Cablear el camino corto ANTES de arrancar el vigilante: si
+            // arranca primero, su primera ronda se va por el dongle que no
+            // esta y publica "sin dongle" sin motivo.
+            LectorBmsDirecto.leer = { mac ->
+                LectorBmsAndroid.leer(ctx, radioInterna, mac)
+            }
+            LectorBmsDirecto.barrer = { segundos ->
+                LectorBmsAndroid.barrer(radioInterna, segundos)
+            }
+
+            val v = VigilanteBateria(ctx)
+            vigilante = v
+            EstadoActual.vigilanteBateria = v
+            v.alCambiar = { runCatching { EstadoActual.alCambiarBateria?.invoke() } }
+            v.arrancar()
+
+            EstadoActual.leerBmsAhora = { mac ->
+                val lectura = LectorBmsAndroid.leer(ctx, radioInterna, mac)
+                lectura.traza + lectura.problemas +
+                    listOfNotNull(
+                        lectura.basico?.let { "BASICO: $it" },
+                        lectura.celdas?.let { "CELDAS: $it" },
+                    )
+            }
+        }.onFailure { Log.w(TAG, "la bateria por radio interna no arranco: ${it.message}") }
+    }
+
     private fun arrancarBateria() {
         runCatching {
             // Enchufa la capa ACL/L2CAP al lector del BMS. Mientras esto fuera
@@ -377,6 +430,10 @@ class DashService : Service() {
         runCatching { vigilante?.detener() }
         vigilante = null
         EstadoActual.vigilanteBateria = null
+        // Desenchufar tambien el camino directo: si quedara puesto, cualquier
+        // ronda superviviente volveria a tomar la radio que acabamos de soltar.
+        LectorBmsDirecto.leer = null
+        LectorBmsDirecto.barrer = null
 
         // Que el tablero no deje colgados los ultimos valores como si el
         // enlace siguiera vivo: un dato viejo sin avisar enseña a no creerle
@@ -488,17 +545,29 @@ class DashService : Service() {
                         EstadoActual.lectorObd = null
                         "dongle apagado"
                     }
+                    // Por omision, la radio INTERNA, igual que el motor.
                     "bateria" -> if (encender) {
+                        if (vigilante == null) arrancarBateriaInterna()
+                        "bateria encendida por la radio interna"
+                    } else {
+                        LectorBmsDirecto.leer = null
+                        LectorBmsDirecto.barrer = null
+                        runCatching { vigilante?.detener() }
+                        vigilante = null
+                        EstadoActual.vigilanteBateria = null
+                        "bateria apagada"
+                    }
+                    "bateria-dongle" -> if (encender) {
                         if (vigilante == null) arrancarBateria() else "la bateria ya estaba encendida"
-                        "bateria encendida"
+                        "bateria encendida por el dongle"
                     } else {
                         runCatching { vigilante?.detener() }
                         vigilante = null
                         EstadoActual.vigilanteBateria = null
                         "bateria apagada"
                     }
-                    else -> "fuente desconocida: $cual " +
-                        "(usa motor, motor-dongle o bateria)"
+                    else -> "fuente desconocida: $cual (usa motor, " +
+                        "motor-dongle, bateria o bateria-dongle)"
                 }
             }.getOrElse { "ERROR: ${it.message}" }
         }

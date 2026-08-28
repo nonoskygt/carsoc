@@ -132,6 +132,39 @@ class VigilanteBateria(private val context: Context) {
 
     /** Barrido BLE, solo mientras no se sepa a quien conectarse. */
     private fun barrerParaEncontrarla() {
+        // Con la radio interna cableada no hace falta abrir ningun dongle.
+        val interno = LectorBmsDirecto.barrer
+        if (interno != null) {
+            if (!estado.detectada()) {
+                publicar(estado.copy(enlace = EnlaceBateria.Buscando, detalle = null))
+            }
+            val oidas = runCatching { interno(BARRIDO_MS.toInt() / 1000) }
+                .getOrDefault(emptyList())
+                .map { Hallazgo(it.first, it.second, it.third) }
+            val elegida = elegir(oidas)
+            if (elegida == null) {
+                publicar(estado.copy(
+                    enlace = EnlaceBateria.Buscando,
+                    detalle = "no se oyo ninguna BMS por la radio interna",
+                ))
+                return
+            }
+            macRecordada = elegida.mac
+            publicar(estado.copy(
+                mac = elegida.mac,
+                nombre = elegida.nombre ?: estado.nombre,
+                rssi = elegida.rssi,
+                vistaMs = System.currentTimeMillis(),
+                enlace = EnlaceBateria.Detectada,
+                detalle = null,
+                candidatas = oidas.map {
+                    "${it.mac}  ${it.nombre ?: "(sin nombre)"}  ${it.rssi} dBm" +
+                        if (it.mac == elegida.mac) "  <- elegida" else ""
+                },
+            ))
+            return
+        }
+
         val piezas = RadioBt.tomar(context, "vigilante-bateria")
         if (piezas == null) {
             publicar(estado.copy(
@@ -245,6 +278,20 @@ class VigilanteBateria(private val context: Context) {
         // reentrante justo para esto, asi que volver a pedirlo no se abraza a
         // si mismo.
         runCatching {
+            // Camino corto: la radio INTERNA del head unit. Cuando esta
+            // cableada no hay dongle de por medio, ni canal ATT que abrir, ni
+            // DuenoDongle que respetar — la pila de Android hace el
+            // descubrimiento y el MTU por dentro.
+            val directo = LectorBmsDirecto.leer
+            if (directo != null) {
+                val lectura = directo(mac) ?: run {
+                    publicar(estado.copy(detalle = "la radio interna no devolvio lectura"))
+                    return
+                }
+                publicarLectura(lectura)
+                return
+            }
+
             val fabrica = CanalGattDisponible.fabrica ?: run {
                 publicar(estado.copy(detalle = "el GATT no esta cableado"))
                 return
@@ -255,27 +302,7 @@ class VigilanteBateria(private val context: Context) {
             }
             try {
                 val lectura = LectorBmsGatt(canal).leerTodo()
-                val b = lectura.basico
-                val c = lectura.celdas
-                if (b == null && c == null) {
-                    publicar(estado.copy(detalle = "conectado pero sin datos del BMS"))
-                    return
-                }
-                publicar(
-                    estado.copy(
-                        // El voltaje del 0x03 manda; la suma de celdas del 0x04
-                        // es el respaldo. Si solo llega uno de los dos, se usa
-                        // ese en vez de dejar la pantalla vacia.
-                        voltaje = b?.voltajeV?.toFloat() ?: c?.sumaV?.toFloat(),
-                        soc = b?.soc,
-                        corrienteA = b?.corrienteA?.toFloat(),
-                        temperaturaC = b?.temperaturasC?.maxOrNull()?.toInt(),
-                        celdas = c?.celdasMv?.map { it / 1000f } ?: emptyList(),
-                        vistaMs = System.currentTimeMillis(),
-                        enlace = EnlaceBateria.Leyendo,
-                        detalle = null,
-                    )
-                )
+                publicarLectura(lectura)
             } finally {
                 runCatching { canal.cerrar() }
             }
@@ -285,6 +312,40 @@ class VigilanteBateria(private val context: Context) {
                 publicar(estado.copy(detalle = "fallo leyendo el BMS: ${it.javaClass.simpleName}"))
             }
         }
+    }
+
+    /**
+     * Vuelca una lectura del BMS al estado. Comun a las dos radios.
+     *
+     * Se extrajo al meter la radio interna: antes vivia dentro del camino del
+     * dongle, y duplicarlo habria significado dos sitios donde arreglar la
+     * misma regla de prioridad entre el 0x03 y el 0x04.
+     */
+    private fun publicarLectura(lectura: LectorBmsGatt.Lectura) {
+        val b = lectura.basico
+        val c = lectura.celdas
+        if (b == null && c == null) {
+            publicar(estado.copy(
+                detalle = "conectado pero sin datos del BMS" +
+                    (lectura.problemas.firstOrNull()?.let { ": $it" } ?: ""),
+            ))
+            return
+        }
+        publicar(
+            estado.copy(
+                // El voltaje del 0x03 manda; la suma de celdas del 0x04 es el
+                // respaldo. Si solo llega uno de los dos, se usa ese en vez de
+                // dejar la pantalla vacia.
+                voltaje = b?.voltajeV?.toFloat() ?: c?.sumaV?.toFloat(),
+                soc = b?.soc,
+                corrienteA = b?.corrienteA?.toFloat(),
+                temperaturaC = b?.temperaturasC?.maxOrNull()?.toInt(),
+                celdas = c?.celdasMv?.map { it / 1000f } ?: emptyList(),
+                vistaMs = System.currentTimeMillis(),
+                enlace = EnlaceBateria.Leyendo,
+                detalle = null,
+            )
+        )
     }
 
     private fun publicar(nuevo: BateriaState) {
