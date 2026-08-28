@@ -251,7 +251,6 @@ class DashService : Service() {
         // La pantalla de averias NO protege de esto —llama al lector a pelo—
         // y por HTTP hace mas falta todavia, porque se dispara desde la laptop
         // sin nadie mirando el carro.
-        val cerrojoDtc = java.util.concurrent.atomic.AtomicBoolean(false)
         EstadoActual.leerDtc = { borrar ->
             // Uno a la vez. El puente atiende hasta cuatro peticiones en
             // paralelo, y dos lecturas de codigos simultaneas son exactamente
@@ -661,6 +660,36 @@ class DashService : Service() {
     /** Cuando se vio el motor girando por ultima vez. Cero = nunca en esta vida. */
     @Volatile
     private var ultimoMotorVivoMs = 0L
+
+    /**
+     * Cierto mientras se leen codigos de averia.
+     *
+     * Es campo y no variable local porque lo mira TAMBIEN el latido que repone
+     * las fuentes: reponer el sondeo en mitad de una lectura seria abrir un
+     * segundo enlace al mismo ELM327, que es la colision que costo cuatro
+     * minutos de reconexion el dia que se probo.
+     */
+    private val cerrojoDtc = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Si el dueño QUIERE el motor y la bateria encendidos.
+     *
+     * Empiezan en cierto, que es la correccion de un defecto que llevaba aqui
+     * desde el principio: `onCreate` levantaba el TPMS, el termometro y el
+     * GPS, pero el motor y la bateria SOLO se encendian llamando a `/fuente`
+     * por HTTP. Eso estuvo bien mientras se subian de a una midiendo el
+     * consumo, y nunca se convirtio en arranque de verdad — asi que cada
+     * reinicio del radio dejaba el tablero sin su razon de ser, y el dueño no
+     * tiene forma de hacer un curl desde el carro.
+     *
+     * Se ponen en falso cuando alguien las apaga A PROPOSITO por `/fuente`,
+     * para que el latido no le deshaga la orden a los dos segundos.
+     */
+    @Volatile
+    private var obdDeseado = true
+
+    @Volatile
+    private var bateriaDeseada = true
 
     /**
      * Suelta el receptor de GPS.
@@ -1282,6 +1311,32 @@ class DashService : Service() {
                     if (quiereGps()) arrancarKilometraje() else pararGps()
                 }
 
+                // Y AQUI se levantan el motor y la bateria, que hasta hoy solo
+                // se encendian con un curl. Va en el latido y no en onCreate a
+                // proposito: en onCreate solo se intentaria UNA vez, y en este
+                // radio el Bluetooth tarda en estar listo tras el arranque —
+                // un intento a los tres segundos de encender el carro falla y
+                // el tablero se queda muerto hasta el siguiente reinicio.
+                // Aqui se reintenta cada cinco segundos, para siempre, asi que
+                // tambien se repone solo si algo se cae a mitad de un viaje.
+                runCatching {
+                    // Nunca en mitad de una lectura de codigos: el lector tiene
+                    // el ELM327 tomado y reponer el sondeo abriria un segundo
+                    // enlace contra un adaptador que solo atiende a uno.
+                    if (!cerrojoDtc.get()) {
+                        if (obdDeseado && sondeoInterno == null) arrancarObdInterno()
+                        // La bateria SI respeta el guardian termico, igual que
+                        // ya lo respetaba el vigilante por dentro. El motor no:
+                        // apagarlo dejaria el tablero sin su razon de ser justo
+                        // en el radio donde el calor es el problema.
+                        if (bateriaDeseada && vigilante == null &&
+                            Termometro.permiteBateria()
+                        ) {
+                            arrancarBateriaInterna()
+                        }
+                    }
+                }
+
                 runCatching { Thread.sleep(5_000) }.onFailure { return@thread }
             }
         }
@@ -1295,9 +1350,15 @@ class DashService : Service() {
                     // Por omision, la radio INTERNA. El dongle queda como
                     // "motor-dongle" para poder volver a el sin recompilar.
                     "motor", "obd" -> if (encender) {
+                        obdDeseado = true
                         if (sondeoInterno == null) arrancarObdInterno()
                         "motor encendido por la radio interna"
                     } else {
+                        // Se recuerda la ORDEN, no solo el efecto. El latido
+                        // repone lo que se cae solo; sin esta marca tambien
+                        // repondria lo que el dueño acaba de apagar, y el
+                        // interruptor no serviria de nada.
+                        obdDeseado = false
                         val teniaSondeo = sondeoInterno != null
                         runCatching { enlaceInterno?.cancel() }
                         runCatching { sondeoInterno?.stop() }
@@ -1325,9 +1386,11 @@ class DashService : Service() {
                     }
                     // Por omision, la radio INTERNA, igual que el motor.
                     "bateria" -> if (encender) {
+                        bateriaDeseada = true
                         if (vigilante == null) arrancarBateriaInterna()
                         "bateria encendida por la radio interna"
                     } else {
+                        bateriaDeseada = false
                         LectorBmsDirecto.leer = null
                         LectorBmsDirecto.barrer = null
                         runCatching { vigilante?.detener() }
