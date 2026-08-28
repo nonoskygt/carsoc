@@ -259,17 +259,6 @@ object EstadoActual {
     var barrerBleHci: ((Int, Int?, Int?, Boolean, Boolean) -> List<String>)? = null
 
     /**
-     * Prueba el camino de datos ACL/L2CAP contra un aparato real.
-     *
-     * Es lo que distingue "encuentro la bateria" de "leo la bateria": el
-     * barrido solo escucha anuncios, esto abre un enlace y habla ATT por el.
-     * Devuelve la traza paso a paso porque cuando falle habra que saber en
-     * cual de los ocho pasos fue, desde la laptop y sin tocar el radio.
-     */
-    @Volatile
-    var probarAcl: ((String, Int?, Int?, Int) -> List<String>)? = null
-
-    /**
      * Abre el USB-serial y vuelca lo que llegue, en crudo.
      *
      * El formato de trama del receptor TPMS es propietario: hay que ver bytes

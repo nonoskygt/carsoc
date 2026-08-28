@@ -21,8 +21,15 @@ package com.nonosky.s2000dash.obd
  */
 object Dtc {
 
-    /** Un codigo ya legible, con su forma cruda por si hay que depurar. */
-    data class Codigo(val texto: String, val crudo: Int) {
+    /**
+     * Un codigo ya legible.
+     *
+     * Llevaba tambien los dos bytes crudos "por si hay que depurar", y nadie
+     * los miro nunca: el texto ya se deduce de ellos y la traza del lector
+     * guarda la respuesta entera del ELM327, que es lo que de verdad sirve
+     * cuando algo no cuadra.
+     */
+    data class Codigo(val texto: String) {
         /** P, C, B o U. */
         val sistema: Char get() = texto.first()
     }
@@ -76,10 +83,7 @@ object Dtc {
         val d2 = alto and 0x0F
         val d3 = (bajo shr 4) and 0x0F
         val d4 = bajo and 0x0F
-        return Codigo(
-            "%c%d%X%X%X".format(letra, d1, d2, d3, d4),
-            (alto shl 8) or bajo,
-        )
+        return Codigo("%c%d%X%X%X".format(letra, d1, d2, d3, d4))
     }
 
     /**

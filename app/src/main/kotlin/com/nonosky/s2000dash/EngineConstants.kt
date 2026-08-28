@@ -33,13 +33,11 @@ object EngineConstants {
      * El RPM llega cada ~160 ms; sin suavizado la aguja salta. Subir este
      * valor da una aguja mas suave pero mas retrasada. Ver §8 del diseño.
      */
-    const val NEEDLE_TAU_MS = 120f
 
     /** Antiguedad (ms) a partir de la cual un valor se dibuja en gris. */
     const val STALE_AFTER_MS = 3_000L
 
     /** Zona normal de temperatura de refrigerante (°C), para la barra. */
-    const val COOLANT_NORMAL_C = 88
     const val COOLANT_HIGH_C = 105
 
     /**
@@ -53,7 +51,6 @@ object EngineConstants {
      * ocupa sitio y obliga a estimar; un numero de color se lee de reojo y da
      * el valor exacto a la vez.
      */
-    const val COOLANT_FRIO_C = 70
 
     /** Debajo de esto el motor aun no ha llegado a temperatura. */
     const val COOLANT_TIBIO_C = 82
