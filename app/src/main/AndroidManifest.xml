@@ -19,8 +19,13 @@
       sin ella startDiscovery no devuelve nada y parece que no hay adaptador.
       De API 31 en adelante basta BLUETOOTH_SCAN con neverForLocation.
     -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="30" />
+    <!--
+      Sin tope de version: ademas del barrido Bluetooth, ahora el GPS mide
+      los kilometros para la vida del aceite. El odometro no se puede leer de
+      la ECU de este carro —su mapa de PIDs se corta en el 0x20— asi que la
+      distancia hay que medirla por fuera, y eso hace falta en cualquier API.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- Descargar el APK nuevo del servidor del taller. -->
     <uses-permission android:name="android.permission.INTERNET" />

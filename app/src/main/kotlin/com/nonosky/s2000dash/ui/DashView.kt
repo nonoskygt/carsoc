@@ -140,7 +140,13 @@ class DashView @JvmOverloads constructor(
         val w = width.toFloat()
         val h = height.toFloat()
         val ahora = System.currentTimeMillis()
-        canvas.drawColor(COLOR_BG)
+
+        // El VTEC se resuelve LO PRIMERO porque tiñe el fondo, y el fondo se
+        // pinta antes que todo lo demas.
+        val vtec = vtecVisible(ahora)
+        canvas.drawColor(
+            if (vtec && parpadeo()) COLOR_VTEC_FONDO else COLOR_BG
+        )
 
         // TRES columnas iguales, como las pidio el dueño:
         //
@@ -154,7 +160,7 @@ class DashView @JvmOverloads constructor(
         dibujarMotor(canvas, 0f, col, h, ahora)
         dibujarBateria(canvas, col, col, h * 0.42f, ahora)
         dibujarLlantas(canvas, col, col, h, ahora, h * 0.42f)
-        dibujarLibre(canvas, col * 2f, col, h)
+        dibujarLibre(canvas, col * 2f, col, h, vtec)
 
         // Separadores tenues: tres columnas sin linea se leen como un solo
         // amontonamiento, sobre todo de reojo.
@@ -164,7 +170,68 @@ class DashView @JvmOverloads constructor(
         canvas.drawLine(col * 2f, h * 0.06f, col * 2f, h * 0.94f, trazoPaint)
 
         dibujarSaludDelRadio(canvas, w, h)
+        // El AJUSTE ya no se pinta aparte: MEZCLA muestra la suma de los dos.
+        // En su hueco de abajo a la izquierda va el VTEC.
+        dibujarVtec(canvas, w, h, vtec)
         dibujarCerrar(canvas, w, h)
+        dibujarConfirmacionAceite(canvas, w, h)
+    }
+
+    /**
+     * La pregunta de "aceite cambiado?", encima de todo.
+     *
+     * Reiniciar el intervalo borra la unica cuenta que existe: no hay
+     * odometro real de donde recuperarla, porque esta ECU no lo expone. Un
+     * reinicio sin querer significa que el proximo cambio caiga 6000 km tarde
+     * y que nadie se entere hasta que el aceite ya este hecho barro. Por eso
+     * van los dos filtros seguidos: cinco segundos sosteniendo el dedo, y
+     * encima un SI explicito.
+     */
+    private fun dibujarConfirmacionAceite(canvas: Canvas, w: Float, h: Float) {
+        if (!confirmandoAceite) return
+
+        // Velo oscuro sobre el tablero: deja claro que lo de abajo esta
+        // esperando y que esto es lo unico que se puede tocar ahora.
+        barPaint.color = 0xE6000000.toInt()
+        canvas.drawRect(0f, 0f, w, h, barPaint)
+
+        labelPaint.textAlign = Paint.Align.CENTER
+        labelPaint.color = COLOR_TEXT
+        labelPaint.textSize = h * 0.085f
+        canvas.drawText("ACEITE CAMBIADO?", w * 0.5f, h * 0.28f, labelPaint)
+
+        labelPaint.color = COLOR_TEXT_DIM
+        labelPaint.textSize = h * 0.048f
+        canvas.drawText(
+            "se reinician los kilometros Y las horas",
+            w * 0.5f, h * 0.40f, labelPaint,
+        )
+
+        val anchoBoton = w * 0.22f
+        val altoBoton = h * 0.22f
+        val yTop = h * 0.52f
+        cajaConfirmarSi.set(
+            w * 0.28f - anchoBoton / 2, yTop, w * 0.28f + anchoBoton / 2, yTop + altoBoton,
+        )
+        cajaConfirmarNo.set(
+            w * 0.72f - anchoBoton / 2, yTop, w * 0.72f + anchoBoton / 2, yTop + altoBoton,
+        )
+
+        trazoPaint.strokeWidth = h * 0.008f
+        trazoPaint.color = COLOR_GREEN
+        canvas.drawRoundRect(cajaConfirmarSi, altoBoton * 0.2f, altoBoton * 0.2f, trazoPaint)
+        trazoPaint.color = COLOR_SILUETA
+        canvas.drawRoundRect(cajaConfirmarNo, altoBoton * 0.2f, altoBoton * 0.2f, trazoPaint)
+
+        textPaint.textSize = h * 0.10f
+        textPaint.color = COLOR_GREEN
+        canvas.drawText(
+            "SI", cajaConfirmarSi.centerX(), cajaConfirmarSi.centerY() + h * 0.035f, textPaint,
+        )
+        textPaint.color = COLOR_TEXT_DIM
+        canvas.drawText(
+            "NO", cajaConfirmarNo.centerX(), cajaConfirmarNo.centerY() + h * 0.035f, textPaint,
+        )
     }
 
     /**
@@ -210,6 +277,31 @@ class DashView @JvmOverloads constructor(
     override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
         when (event.actionMasked) {
             android.view.MotionEvent.ACTION_DOWN -> {
+                // Con la confirmacion abierta, lo unico que existe son SI y
+                // NO. Cualquier otro sitio la cierra sin hacer nada, que es
+                // la respuesta segura ante un toque perdido.
+                if (confirmandoAceite) {
+                    if (cajaConfirmarSi.contains(event.x, event.y)) {
+                        runCatching { alConfirmarAceite?.invoke() }
+                    }
+                    confirmandoAceite = false
+                    invalidate()
+                    performClick()
+                    return true
+                }
+
+                // El aceite: se empieza a contar los 5 s del reinicio, y si
+                // se suelta antes solo cambia de cara. Un mismo sitio hace
+                // las dos cosas y las separa el TIEMPO, no la posicion, asi
+                // que no hay que buscar un segundo boton en una pantalla que
+                // ya no tiene sitio.
+                if (cajaAceite.contains(event.x, event.y)) {
+                    sosteniendoAceite = true
+                    aceiteDesdeMs = System.currentTimeMillis()
+                    postDelayed(pedirConfirmacionAceite, MS_RESET_ACEITE)
+                    invalidate()
+                    return true
+                }
                 if (!cajaCerrar.contains(event.x, event.y)) return false
                 cerrando = true
                 invalidate()
@@ -219,16 +311,43 @@ class DashView @JvmOverloads constructor(
             android.view.MotionEvent.ACTION_MOVE -> {
                 // Si el dedo se sale de la caja, ya no cuenta.
                 if (cerrando && !cajaCerrar.contains(event.x, event.y)) cancelarCierre()
-                return cerrando
+                if (sosteniendoAceite && !cajaAceite.contains(event.x, event.y)) {
+                    cancelarSostenidoAceite(cambiarCara = false)
+                }
+                return cerrando || sosteniendoAceite
             }
             android.view.MotionEvent.ACTION_UP,
             android.view.MotionEvent.ACTION_CANCEL -> {
-                val estaba = cerrando
+                val estaba = cerrando || sosteniendoAceite
                 cancelarCierre()
+                // Soltar antes de los 5 s NO reinicia nada: solo pasa a la
+                // siguiente cara. Es el atajo natural, y ademas hace que
+                // trastear con la pantalla sea inofensivo.
+                cancelarSostenidoAceite(
+                    cambiarCara = event.actionMasked == android.view.MotionEvent.ACTION_UP,
+                )
                 return estaba
             }
         }
         return false
+    }
+
+    private fun cancelarSostenidoAceite(cambiarCara: Boolean) {
+        if (!sosteniendoAceite) return
+        sosteniendoAceite = false
+        removeCallbacks(pedirConfirmacionAceite)
+        if (cambiarCara) {
+            caraAceite++
+            performClick()
+        }
+        invalidate()
+    }
+
+    private val pedirConfirmacionAceite = Runnable {
+        if (!sosteniendoAceite) return@Runnable
+        sosteniendoAceite = false
+        confirmandoAceite = true
+        invalidate()
     }
 
     private fun cancelarCierre() {
@@ -301,12 +420,82 @@ class DashView @JvmOverloads constructor(
         labelPaint.color = color
         canvas.drawText(texto, w * 0.5f, h * 0.985f, labelPaint)
 
-        // El AJUSTE ya no se pinta aparte: MEZCLA muestra la suma de los dos
-        // y repetir el desglose debajo era decir dos veces lo mismo. El corto
-        // y el largo por separado siguen estando en /state para cuando haya
-        // que diagnosticar de verdad, que es cuando esa distincion importa.
-        dibujarVtec(canvas, w, h)
         dibujarEstadoEnlaces(canvas, w, h)
+    }
+
+    /** Que cara del aceite se esta mostrando. Se cambia tocandola. */
+    private var caraAceite = 0
+
+    /** Donde quedo la fila del aceite, para poder tocarla. */
+    private val cajaAceite = RectF()
+
+    /** Se esta sosteniendo el dedo sobre el aceite, contando los 5 s. */
+    private var sosteniendoAceite = false
+    private var aceiteDesdeMs = 0L
+
+    /** Esta abierta la pregunta de confirmacion del cambio de aceite. */
+    private var confirmandoAceite = false
+    private val cajaConfirmarSi = RectF()
+    private val cajaConfirmarNo = RectF()
+
+    /** Que hacer cuando se confirma que se cambio el aceite. */
+    var alConfirmarAceite: (() -> Unit)? = null
+
+    /**
+     * La vida del aceite. Tres caras, una por toque.
+     *
+     * El color NO depende de la cara que se este mirando: si toca cambiar, lo
+     * dice igual estando en horas que en kilometros. Que el aviso dependiera
+     * de por donde se dejo la pantalla seria la peor clase de defecto — uno
+     * que solo aparece cuando nadie mira.
+     */
+    private fun dibujarAceite(canvas: Canvas, x0: Float, x1: Float, h: Float) {
+        val m = com.nonosky.s2000dash.Mantenimiento
+        val y = h * 0.55f
+        cajaAceite.set(x0, y - h * 0.11f, x1, y + h * 0.06f)
+
+        val color = when {
+            m.toca -> if (parpadeo()) COLOR_REDLINE else COLOR_AMBER
+            m.cerca -> COLOR_AMBER
+            else -> COLOR_TEXT
+        }
+
+        val etiqueta: String
+        val valor: String
+        when (caraAceite % 4) {
+            // El PORCENTAJE es la cara por omision: es lo unico de las cuatro
+            // que se entiende sin saber cual era el intervalo ni cuando fue
+            // el ultimo cambio. Las otras tres son el detalle, para quien
+            // quiera mirarlo.
+            0 -> {
+                etiqueta = "ACEITE"
+                valor = "${m.vidaPct} %"
+            }
+            1 -> {
+                etiqueta = "ACEITE km"
+                valor = if (m.proximoCambioKm <= 0f) "--"
+                    else "%.0f".format(m.kmRestantes)
+            }
+            2 -> {
+                etiqueta = "ACEITE h"
+                valor = "%.0f h".format(m.horasRestantes)
+            }
+            else -> {
+                etiqueta = "ODOMETRO"
+                valor = "%.0f".format(m.odometroKm)
+            }
+        }
+        filaGrande(canvas, x0, x1, y, h, etiqueta, valor, color)
+
+        // Mientras se sostiene, una barra que se llena. Sin ella, cinco
+        // segundos aguantando sin que pase nada se leen como que no funciona
+        // y el dedo se levanta antes de tiempo.
+        if (sosteniendoAceite) {
+            val t = ((System.currentTimeMillis() - aceiteDesdeMs).toFloat() /
+                MS_RESET_ACEITE).coerceIn(0f, 1f)
+            barPaint.color = COLOR_AMBER
+            canvas.drawRect(x0, y + h * 0.05f, x0 + (x1 - x0) * t, y + h * 0.075f, barPaint)
+        }
     }
 
     /** Hasta cuando se sigue pintando el VTEC despues de soltarlo. */
@@ -341,11 +530,23 @@ class DashView @JvmOverloads constructor(
      * facil tener rpm de ahora con una carga de hace un segundo — y cantar un
      * VTEC con datos de dos momentos distintos es inventarlo.
      */
-    private fun dibujarVtec(canvas: Canvas, w: Float, h: Float) {
-        val ahora = System.currentTimeMillis()
+    /**
+     * Decide si el VTEC cuenta como enganchado AHORA, y sostiene el aviso.
+     *
+     * Se separa de lo que pinta porque el fondo tambien lo necesita, y el
+     * fondo va antes que todo. Llamarlo dos veces por cuadro adelantaria el
+     * plazo dos veces; se llama UNA y el resultado se pasa.
+     */
+    private fun vtecVisible(ahora: Long): Boolean {
         val cargaFresca = !state.isStale(state.loadAtMs, ahora)
         if (state.vtecActive && cargaFresca) vtecHastaMs = ahora + MS_VTEC_VISIBLE
-        if (ahora > vtecHastaMs) return
+        // Forzado desde el puente, solo para poder verlo sin redlinear.
+        if (ahora <= com.nonosky.s2000dash.EstadoActual.vtecForzadoHastaMs) return true
+        return ahora <= vtecHastaMs
+    }
+
+    private fun dibujarVtec(canvas: Canvas, w: Float, h: Float, visible: Boolean) {
+        if (!visible) return
 
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = h * 0.075f
@@ -725,7 +926,10 @@ class DashView @JvmOverloads constructor(
      * colector, acelerador y avance, que en un atmosferico exprimido dicen
      * bastante mas que un flotador de gasolina.
      */
-    private fun dibujarLibre(canvas: Canvas, left: Float, ancho: Float, h: Float) {
+    private fun dibujarLibre(
+        canvas: Canvas, left: Float, ancho: Float, h: Float,
+        vtecEnganchado: Boolean,
+    ) {
         val ahora = System.currentTimeMillis()
         val margen = ancho * 0.08f
         val x0 = left + margen
@@ -742,29 +946,57 @@ class DashView @JvmOverloads constructor(
         // quito el dueño.
         val map = state.mapKpa
         val mapStale = state.isStale(state.mapAtMs, ahora)
+        // En PSI, como lo pidio el dueño. Es presion ABSOLUTA, no manometrica:
+        // a esta altitud —1503 m, medidos por el GPS del propio radio— la
+        // atmosferica ronda 12,3 PSI, asi que el motor parado marca eso y no
+        // cero. Al ralenti baja a ~4 PSI, que es el vacio de admision.
         filaGrande(canvas, x0, x1, h * 0.30f, h, "COLECTOR",
-            map?.let { "$it kPa" } ?: "-- kPa",
+            map?.let { "%.1f PSI".format(it * KPA_A_PSI) } ?: "-- PSI",
             if (mapStale) COLOR_STALE else COLOR_TEXT)
 
-        val ace = state.aceleradorPct
-        filaGrande(canvas, x0, x1, h * 0.55f, h, "ACELERADOR",
-            ace?.let { "$it %" } ?: "-- %",
-            if (state.isStale(state.aceleradorAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
+        // ACEITE en vez de ACELERADOR.
+        //
+        // El acelerador se quito por inutil manejando —el pie ya sabe donde
+        // esta— y su sitio se lo lleva lo unico de esta pantalla que sirve
+        // para no romper el motor: cuanto le queda al aceite.
+        //
+        // Se TOCA para cambiar entre kilometros, horas y odometro. Son tres
+        // caras del mismo dato y no caben las tres a la vez, pero ninguna
+        // sobra: los kilometros son el intervalo de siempre, las horas
+        // atrapan el trafico parado —donde el aceite se cocina sin que el
+        // odometro avance— y el odometro es lo que se compara con el tablero
+        // del carro para reanclar cuando derive.
+        dibujarAceite(canvas, x0, x1, h)
 
         filaGrande(canvas, x0, x1, h * 0.76f, h, "AVANCE",
             state.avanceGrados?.let { "$it °" } ?: "-- °",
             if (state.isStale(state.avanceAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
 
-        // CARGA en vez de VELOCIDAD.
+        // VTEC en vez de CARGA.
         //
-        // La velocidad se quito por peticion del dueño —el carro ya la tiene
-        // en el cuadro original, y repetirla gastaba un tercio del
-        // presupuesto de la K-line en un dato duplicado—. En su sitio va la
-        // carga calculada, que no esta en ningun otro reloj del carro y
-        // ademas es la que decide si el VTEC cuenta como enganchado.
-        filaGrande(canvas, x0, x1, h * 0.95f, h, "CARGA",
-            state.loadPct?.let { "$it %" } ?: "-- %",
-            if (state.isStale(state.loadAtMs, ahora)) COLOR_STALE else COLOR_TEXT)
+        // Aqui vivio primero la VELOCIDAD, que el dueño quito porque ya la
+        // tiene en el cuadro original. Luego la CARGA, que tambien quito: es
+        // un dato de taller y no dice nada manejando.
+        //
+        // La carga NO deja de pedirse — es justo lo que decide si el VTEC
+        // cuenta como enganchado, y sin ella la deduccion no existe. Lo que
+        // se quita es el sitio en pantalla, no la lectura.
+        //
+        // Y se dicen TRES cosas, no dos. Cuando no hay carga fresca no se
+        // puede saber si el VTEC esta o no, y contestar "NO" en ese caso
+        // seria afirmar algo que no se sabe. Eso sale como guiones.
+        val puedeSaberse = state.loadPct != null && !state.isStale(state.loadAtMs, ahora)
+        filaGrande(canvas, x0, x1, h * 0.95f, h, "VTEC",
+            when {
+                !puedeSaberse -> "--"
+                vtecEnganchado -> "SI"
+                else -> "NO"
+            },
+            when {
+                !puedeSaberse -> COLOR_STALE
+                vtecEnganchado -> COLOR_VTEC_ON
+                else -> COLOR_TEXT_DIM
+            })
     }
 
     // --- Motor --------------------------------------------------------------
@@ -999,6 +1231,23 @@ class DashView @JvmOverloads constructor(
         const val COLOR_AMBER = 0xFFFFB020.toInt()
         const val COLOR_REDLINE = 0xFFFF3B30.toInt()
         const val COLOR_VTEC_ON = 0xFF00C2FF.toInt()
+
+        /**
+         * Rojo del fondo cuando engancha el VTEC.
+         *
+         * Oscuro a proposito, no un rojo puro. Esto pasa a 5850 rpm con el
+         * pedal a fondo —o sea de noche tambien— y un fondo saturado a
+         * pantalla completa deslumbra y borra los numeros justo en el
+         * momento en que el motor esta trabajando al maximo. Asi tiñe lo
+         * suficiente para que el ojo lo cace de reojo sin cegar ni tapar
+         * nada.
+         *
+         * Parpadea al ritmo de [parpadeo] (500 ms). No mas rapido: el
+         * tablero repinta entre 5 y 1 cuadros por segundo segun lo caliente
+         * que este el radio, y un parpadeo mas corto que dos cuadros no se
+         * veria como parpadeo sino como ruido.
+         */
+        const val COLOR_VTEC_FONDO = 0xFF5A0000.toInt()
         const val COLOR_COLD = 0xFF3D8BFF.toInt()
 
         /** Lo que hay que sostener la X para que el tablero se cierre. */
@@ -1006,6 +1255,12 @@ class DashView @JvmOverloads constructor(
 
         /** Cuanto se sostiene el aviso de VTEC tras soltarlo. */
         const val MS_VTEC_VISIBLE = 2_000L
+
+        /** 1 kPa son 0,145038 PSI. */
+        const val KPA_A_PSI = 0.145038f
+
+        /** Lo que hay que sostener el aceite para que pregunte si reiniciar. */
+        const val MS_RESET_ACEITE = 5_000L
 
         /**
          * 200 ms entre cuadros: 5 por segundo.

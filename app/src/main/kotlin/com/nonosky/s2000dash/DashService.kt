@@ -76,6 +76,7 @@ class DashService : Service() {
         // Antes que nada: sin contexto, el termometro se queda solo con
         // sysfs, que es justo lo que este radio no deja leer.
         Termometro.iniciar(applicationContext)
+        Mantenimiento.iniciar(applicationContext)
 
         puente = DebugServer(
             stateProvider = { EstadoActual.ultimo },
@@ -98,6 +99,12 @@ class DashService : Service() {
         // Ahora se sube de a una fuente, midiendo /termica entre cada paso.
         arrancarTpms()
         arrancarTermometro()
+        // La vida del aceite vive AQUI, en el servicio que no muere al cerrar
+        // el tablero. Cuenta horas de motor y kilometros por GPS, y las dos
+        // cosas tienen que seguir contando con la pantalla apagada — si solo
+        // contaran con el tablero abierto, el intervalo mediria cuanto mira
+        // el dueño la pantalla y no cuanto anda el carro.
+        arrancarKilometraje()
         registrarInterruptores()
 
         vivo = true
@@ -313,8 +320,74 @@ class DashService : Service() {
         }.onFailure { Log.w(TAG, "TPMS no arranco: ${it.message}") }
     }
 
+    private var oyenteGps: android.location.LocationListener? = null
+    private var ultimaPosicion: android.location.Location? = null
+
+    /**
+     * Cuenta kilometros por GPS. El odometro de la ECU no existe.
+     *
+     * Se le pregunto al carro que soporta y su mapa de PIDs se corta en el
+     * `0x20`: no hay odometro (`01A6`) ni tiempo de motor (`011F`). Un AP1 no
+     * los expone, asi que la distancia hay que medirla por fuera.
+     *
+     * Se pide una muestra cada 5 s y con 10 m de movimiento minimo. No mas
+     * seguido: el receptor ya esta encendido para el resto del sistema —lo
+     * usan el launcher y la app del fabricante— asi que esto se cuelga de
+     * algo que ya corre, y pedir a 1 Hz solo añadiria calor a un radio que ya
+     * se apago tres veces por eso.
+     */
+    private fun arrancarKilometraje() {
+        runCatching {
+            val lm = getSystemService(Context.LOCATION_SERVICE)
+                as? android.location.LocationManager ?: return
+            val oyente = object : android.location.LocationListener {
+                override fun onLocationChanged(pos: android.location.Location) {
+                    // Envuelto entero: esto llega en un hilo del sistema y una
+                    // excepcion suelta ahi se lleva el servicio, el puente y
+                    // el aviso de las llantas por delante.
+                    runCatching {
+                        val previa = ultimaPosicion
+                        ultimaPosicion = pos
+                        if (previa == null) return@runCatching
+                        Mantenimiento.sumarDistancia(
+                            previa.distanceTo(pos),
+                            if (pos.hasSpeed()) pos.speed else 0f,
+                            if (pos.hasAccuracy()) pos.accuracy else 999f,
+                        )
+                    }
+                }
+
+                @Deprecated("Obligatorio hasta API 29")
+                override fun onStatusChanged(p: String?, e: Int, x: android.os.Bundle?) = Unit
+                override fun onProviderEnabled(p: String) = Unit
+                override fun onProviderDisabled(p: String) = Unit
+            }
+            lm.requestLocationUpdates(
+                android.location.LocationManager.GPS_PROVIDER, 5_000L, 10f, oyente,
+            )
+            oyenteGps = oyente
+            Log.i(TAG, "kilometraje por GPS en marcha")
+        }.onFailure { Log.w(TAG, "GPS no arranco: ${it.message}") }
+    }
+
     /** Ruedas que ya estan avisadas, para no repetir la alerta. */
     private val ruedasAvisadas = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /**
+     * Presion de cada rueda hace un rato, para ver si se esta yendo DEPRISA.
+     *
+     * Una llanta que pierde media libra por semana y otra que pierde cinco en
+     * dos minutos son dos averias distintas: la primera se infla el sabado, la
+     * segunda hay que pararse a mirarla ya. El umbral de presion baja no las
+     * distingue —las dos acaban abajo— y para cuando salta, la rapida ya lleva
+     * rato rodando desinflada.
+     *
+     * Guarda: (psi, cuando).
+     */
+    private val presionAnterior = java.util.concurrent.ConcurrentHashMap<String, Pair<Float, Long>>()
+
+    /** Ruedas ya avisadas por pinchazo, para no repetir. */
+    private val ruedasPinchadas = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     /**
      * Vigila la presion y avisa aunque el tablero este cerrado.
@@ -344,6 +417,10 @@ class DashService : Service() {
             }.getOrDefault(false)
             val yaAvisada = ruedasAvisadas[clave] == true
 
+            // PINCHAZO: caida rapida, aunque todavia no este por debajo del
+            // umbral. Se mira antes que la presion baja porque es la urgente.
+            runCatching { revisarPinchazo(clave, lectura) }
+
             if (baja && !yaAvisada) {
                 ruedasAvisadas[clave] = true
                 runCatching { avisarPresionBaja(lectura) }
@@ -359,7 +436,49 @@ class DashService : Service() {
         }
     }
 
-    private fun avisarPresionBaja(lectura: com.nonosky.s2000dash.tpms.LecturaRueda) {
+    /**
+     * Caida rapida de presion: eso es un pinchazo, no un desinflado.
+     *
+     * Se compara contra una muestra de hace al menos [MS_VENTANA_PINCHAZO] y
+     * se exige perder [PSI_CAIDA_PINCHAZO] en esa ventana. Las dos condiciones
+     * importan: sin la ventana minima, el ruido de dos tramas seguidas
+     * dispararia falsas alarmas; sin la caida minima, el cambio normal por
+     * temperatura —una llanta se calienta rodando y sube casi una libra—
+     * contaria como fuga.
+     */
+    private fun revisarPinchazo(clave: String, lectura: com.nonosky.s2000dash.tpms.LecturaRueda) {
+        val psi = lectura.presionPsi ?: return
+        val ahora = System.currentTimeMillis()
+        if (lectura.rancia(ahora)) return
+
+        val previa = presionAnterior[clave]
+        if (previa == null) {
+            presionAnterior[clave] = psi to ahora
+            return
+        }
+
+        val (psiAntes, cuando) = previa
+        val transcurrido = ahora - cuando
+        if (transcurrido < MS_VENTANA_PINCHAZO) return
+
+        val caida = psiAntes - psi
+        if (caida >= PSI_CAIDA_PINCHAZO && ruedasPinchadas[clave] != true) {
+            ruedasPinchadas[clave] = true
+            runCatching { avisarPresionBaja(lectura, pinchazo = true, caida = caida) }
+                .onFailure { Log.w(TAG, "no se pudo avisar del pinchazo: ${it.message}") }
+        }
+        // Se recoloca la referencia SIEMPRE, haya saltado o no: si no, una
+        // fuga lenta acabaria acumulando diferencia contra una medida de hace
+        // horas y se anunciaria como pinchazo cuando no lo es.
+        presionAnterior[clave] = psi to ahora
+        if (caida < PSI_CAIDA_PINCHAZO / 2f) ruedasPinchadas.remove(clave)
+    }
+
+    private fun avisarPresionBaja(
+        lectura: com.nonosky.s2000dash.tpms.LecturaRueda,
+        pinchazo: Boolean = false,
+        caida: Float = 0f,
+    ) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -367,11 +486,29 @@ class DashService : Service() {
             // ALTA: el del servicio va en silencio a proposito para no
             // molestar, y si la alerta compartiera canal heredaria ese
             // silencio justo cuando hace falta que suene.
+            //
+            // El sonido es el de ALARMA, no el de notificacion. En un carro
+            // con musica puesta un "ding" de notificacion se pierde debajo, y
+            // este aviso llega mientras se maneja: o se oye, o no sirve. Con
+            // USAGE_ALARM ademas suena aunque el aparato este en silencio.
+            val sonido = android.media.RingtoneManager.getDefaultUri(
+                android.media.RingtoneManager.TYPE_ALARM,
+            ) ?: android.media.RingtoneManager.getDefaultUri(
+                android.media.RingtoneManager.TYPE_NOTIFICATION,
+            )
+            val atributos = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
             val canal = NotificationChannel(
                 CANAL_ALERTA, "Avisos de llantas", NotificationManager.IMPORTANCE_HIGH,
             ).apply {
-                description = "Presion baja en una llanta"
+                description = "Presion baja o perdida rapida en una llanta"
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 400, 200, 400, 200, 600)
+                setSound(sonido, atributos)
+                enableLights(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             nm.createNotificationChannel(canal)
         }
@@ -387,23 +524,52 @@ class DashService : Service() {
             },
         )
 
+        val titulo = if (pinchazo) {
+            "PINCHAZO: ${lectura.rueda.corta}"
+        } else {
+            "Presion baja: ${lectura.rueda.corta}"
+        }
+        val cuerpo = if (pinchazo) {
+            "perdio %.1f PSI de golpe — va en %s PSI. Parate a mirarla.".format(caida, psi)
+        } else {
+            "$psi PSI — la placa pide " +
+                com.nonosky.s2000dash.tpms.Escalas.PSI_PLACA.toInt()
+        }
+
         val aviso = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CANAL_ALERTA)
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
+                .setSound(
+                    android.media.RingtoneManager.getDefaultUri(
+                        android.media.RingtoneManager.TYPE_ALARM,
+                    )
+                )
+                .setVibrate(longArrayOf(0, 400, 200, 400, 200, 600))
         }
-            .setContentTitle("Presion baja: ${lectura.rueda.corta}")
-            .setContentText(
-                "$psi PSI — la placa pide " +
-                    com.nonosky.s2000dash.tpms.Escalas.PSI_PLACA.toInt()
-            )
+            .setContentTitle(titulo)
+            .setContentText(cuerpo)
+            .setStyle(Notification.BigTextStyle().bigText(cuerpo))
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentIntent(abrir)
             .setAutoCancel(true)
+            .also {
+                // Un pinchazo interrumpe lo que este sonando; una presion baja
+                // no. La diferencia es que uno se atiende ahora y el otro el
+                // sabado, y gastar la interrupcion en los dos es perderla.
+                if (pinchazo && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    it.setFullScreenIntent(abrir, true)
+                    it.setCategory(Notification.CATEGORY_ALARM)
+                }
+            }
             .build()
 
-        nm.notify(NOTIF_PRESION_BASE + lectura.rueda.ordinal, aviso)
+        // El pinchazo usa OTRO id para no pisar el aviso de presion baja de
+        // la misma rueda: son dos cosas distintas y las dos merecen verse.
+        val id = NOTIF_PRESION_BASE + lectura.rueda.ordinal +
+            if (pinchazo) NOTIF_PINCHAZO_OFFSET else 0
+        nm.notify(id, aviso)
     }
 
     /**
@@ -653,8 +819,23 @@ class DashService : Service() {
      */
     private fun arrancarTermometro() {
         thread(name = "termometro", isDaemon = true) {
+            var ultimoLatido = System.currentTimeMillis()
             while (vivo || !arranco) {
                 runCatching { Termometro.medir() }
+
+                // Horas de motor, sumadas aqui porque este hilo ya late cada
+                // cinco segundos y no cuesta nada mas. Se suma el tiempo REAL
+                // transcurrido y no un 5 fijo: si la ROM congela el proceso un
+                // rato, sumar la constante inventaria horas que no pasaron.
+                runCatching {
+                    val ahora = System.currentTimeMillis()
+                    val delta = ((ahora - ultimoLatido) / 1000L).coerceIn(0L, 30L)
+                    ultimoLatido = ahora
+                    val st = EstadoActual.ultimo
+                    val girando = (st.rpm ?: 0) >= Mantenimiento.RPM_MINIMO_MOTOR &&
+                        !st.isStale(st.rpmAtMs, ahora)
+                    if (girando) Mantenimiento.sumarSegundosMotor(delta)
+                }
                 runCatching { Thread.sleep(5_000) }.onFailure { return@thread }
             }
         }
@@ -726,6 +907,13 @@ class DashService : Service() {
 
     override fun onDestroy() {
         vivo = false
+        runCatching {
+            oyenteGps?.let {
+                (getSystemService(Context.LOCATION_SERVICE)
+                    as? android.location.LocationManager)?.removeUpdates(it)
+            }
+        }
+        oyenteGps = null
         runCatching { enlaceInterno?.cancel() }
         runCatching { sondeoInterno?.stop() }
         runCatching { alcanceInterno?.cancel() }
@@ -809,6 +997,19 @@ class DashService : Service() {
 
         /** Una notificacion por rueda, para poder retirarlas por separado. */
         private const val NOTIF_PRESION_BASE = 100
+
+        /** El pinchazo va en su propio rango de ids. */
+        private const val NOTIF_PINCHAZO_OFFSET = 50
+
+        /**
+         * Cuanto hay que perder para llamarlo pinchazo, y en cuanto tiempo.
+         *
+         * 3 PSI en dos minutos. Rodando, una llanta se CALIENTA y por tanto
+         * SUBE casi una libra, asi que perder tres en ese rato no es
+         * temperatura ni ruido del sensor: es aire saliendo.
+         */
+        private const val PSI_CAIDA_PINCHAZO = 3.0f
+        private const val MS_VENTANA_PINCHAZO = 120_000L
         private const val INTERVALO_MS = 15 * 60 * 1000L
 
         /**

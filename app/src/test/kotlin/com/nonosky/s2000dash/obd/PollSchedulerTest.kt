@@ -39,7 +39,7 @@ class PollSchedulerTest {
 
         // La columna de ADMISION, pagada con los turnos de la velocidad.
         assertEquals(6, c[PidDecoder.PID_MAP])
-        assertEquals(6, c[PidDecoder.PID_ACELERADOR])
+        assertNull(c[PidDecoder.PID_ACELERADOR])
         assertEquals(4, c[PidDecoder.PID_AVANCE])
         assertEquals(4, c[PidDecoder.PID_O2_V])
 
@@ -59,7 +59,7 @@ class PollSchedulerTest {
         // 6 carga + 3 agua + 3 aire + 3 voltaje
         // + 6 colector + 6 acelerador + 4 avance + 4 mezcla
         // + 2 ajuste corto + 2 ajuste largo + 1 estado
-        assertEquals(6 + 3 + 3 + 3 + 6 + 6 + 4 + 4 + 2 + 2 + 1, asignados)
+        assertEquals(6 + 3 + 3 + 3 + 6 + 4 + 4 + 2 + 2 + 1, asignados)
     }
 
     @Test

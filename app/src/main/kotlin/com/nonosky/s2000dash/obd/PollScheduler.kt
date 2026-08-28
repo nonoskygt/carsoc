@@ -284,7 +284,9 @@ class PollScheduler(
         // El colector y el acelerador se mueven rapido y llevan 6 cada uno
         // (~0,6 Hz). El avance y la mezcla cambian mas despacio y llevan 4.
         private val MAP_SLOTS = listOf(0, 9, 18, 27, 36, 45)         // 6
-        private val ACELERADOR_SLOTS = listOf(3, 13, 24, 33, 43, 54) // 6
+        // El ACELERADOR ya no se pide: el dueño lo quito de la pantalla
+        // porque el pie ya sabe donde esta. Sus seis turnos vuelven al
+        // presupuesto y el RPM sube de 6,0 a 7,1 Hz.
         private val AVANCE_SLOTS = listOf(6, 20, 39, 51)             // 4
         private val O2_SLOTS = listOf(16, 30, 47, 57)                // 4
 
@@ -306,7 +308,6 @@ class PollScheduler(
             IAT_SLOTS.forEach { t[it] = PidDecoder.PID_IAT }
             VOLTAGE_SLOTS.forEach { t[it] = PID_VOLTAGE }
             MAP_SLOTS.forEach { t[it] = PidDecoder.PID_MAP }
-            ACELERADOR_SLOTS.forEach { t[it] = PidDecoder.PID_ACELERADOR }
             AVANCE_SLOTS.forEach { t[it] = PidDecoder.PID_AVANCE }
             O2_SLOTS.forEach { t[it] = PidDecoder.PID_O2_V }
             TRIM_CORTO_SLOTS.forEach { t[it] = PidDecoder.PID_TRIM_CORTO }

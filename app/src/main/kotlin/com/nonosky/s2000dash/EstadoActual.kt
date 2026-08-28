@@ -113,6 +113,16 @@ object EstadoActual {
      */
     var soltarBluetooth: (() -> String)? = null
 
+    /**
+     * Fuerza el aviso de VTEC hasta este instante. SOLO para verlo.
+     *
+     * Existe porque comprobar el efecto de verdad exige subir a 5850 rpm con
+     * el pedal a fondo, y eso no se hace en un parqueo para revisar un color.
+     * No falsea ningun dato del motor: solo enciende el aviso.
+     */
+    @Volatile
+    var vtecForzadoHastaMs: Long = 0L
+
     /** Quien declara poder dibujar por encima de todo. */
     var listarOverlays: (() -> List<String>)? = null
 

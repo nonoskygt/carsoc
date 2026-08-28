@@ -154,6 +154,16 @@ class DashActivity : ComponentActivity() {
         // sondeo no volveria a conectar nunca. La radio se le devuelve a
         // Android Auto al CERRAR, que es cuando toca.
         dashView.alCerrar = { cerrarYSoltarRadio() }
+        dashView.alConfirmarAceite = {
+            Mantenimiento.aceiteCambiado()
+            runCatching {
+                android.widget.Toast.makeText(
+                    this,
+                    "Aceite reiniciado: proximo a %.0f km".format(Mantenimiento.proximoCambioKm),
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
 
         // Ya no hay selector de adaptador en pantalla. Abria un barrido y
         // un createBond de la pila de Android, que es exactamente lo que hay

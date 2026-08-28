@@ -379,6 +379,20 @@ class DebugServer(
                         .getOrNull() ?: listOf("ERROR: el servicio no registro la prueba SPP")
                     sendText(out, 200, "text/plain", lista.joinToString(SALTO))
                 }
+                "/aceite" -> {
+                    val m = com.nonosky.s2000dash.Mantenimiento
+                    consulta["odometro"]?.toFloatOrNull()?.let { m.anclarOdometro(it) }
+                    consulta["proximo"]?.toFloatOrNull()?.let { m.proximoCambioKm = it }
+                    consulta["intervalo"]?.toFloatOrNull()?.let { m.intervaloKm = it }
+                    consulta["horas"]?.toFloatOrNull()?.let { m.intervaloHoras = it }
+                    if (consulta["cambiado"] == "1") m.aceiteCambiado()
+                    sendText(out, 200, "text/plain", m.diagnostico().joinToString(SALTO))
+                }
+                "/vtec" -> {
+                    val seg = (consulta["segundos"]?.toIntOrNull() ?: 6).coerceIn(1, 60)
+                    EstadoActual.vtecForzadoHastaMs = System.currentTimeMillis() + seg * 1000L
+                    sendText(out, 200, "text/plain", "VTEC forzado ${seg}s (solo el aviso)")
+                }
                 "/soltar-bt" -> {
                     val r = runCatching { EstadoActual.soltarBluetooth?.invoke() }
                         .getOrNull() ?: "el servicio no registro soltarBluetooth"
