@@ -371,7 +371,16 @@ class DebugServer(
                 "/pids" -> {
                     val lista = runCatching { EstadoActual.pidsSoportados?.invoke() }
                         .getOrNull() ?: listOf("ERROR: el servicio no registro la consulta de PIDs")
-                    sendText(out, 200, "text/plain", lista.joinToString(SALTO))
+                    // Un cuerpo en blanco en esta ruta se lee como "este carro
+                    // no soporta nada", que es justo lo que NO se sabe cuando
+                    // nadie contestó. El vacío nunca puede salir por el mismo
+                    // sitio que un dato.
+                    val texto = if (lista.isEmpty()) {
+                        "ERROR: la consulta no devolvio ni una linea. NO se leyo el mapa de PIDs de este carro."
+                    } else {
+                        lista.joinToString(SALTO)
+                    }
+                    sendText(out, 200, "text/plain", texto)
                 }
                 "/dtc" -> {
                     // Los codigos de averia sin tocar el radio. La pantalla de
@@ -432,8 +441,21 @@ class DebugServer(
                         "",
                         "condicion: rpm >= ${ec.RPM_VTEC} Y carga >= ${ec.VTEC_MIN_LOAD_PCT}%" +
                             ", con la carga fresca",
+                        // El "cumple" exige la carga FRESCA, que es lo que
+                        // promete el renglon de arriba y lo que ya exigen el
+                        // fondo rojo del tablero y el contador de enganches.
+                        // `vtecActive` por si sola solo mira rpm y carga, no
+                        // la fecha: con el 0104 caido de la rotacion la carga
+                        // se queda congelada en el ultimo aceleron y este
+                        // renglon cantaba cumple=SI con el motor
+                        // revolucionado en punto muerto, mientras el tablero
+                        // —que si mira la edad— pintaba guiones.
                         "ahora: rpm=${s.rpm ?: "--"}  carga=${s.loadPct ?: "--"}%" +
-                            "  cumple=${if (s.vtecActive) "SI" else "no"}",
+                            "  cumple=" + when {
+                                s.isStale(s.loadAtMs, ahora) -> "no se sabe: carga rancia"
+                                s.vtecActive -> "SI"
+                                else -> "no"
+                            },
                         "",
                         "veces que engancho: ${EstadoActual.vecesVtec}",
                         "ultima vez: " + (
@@ -623,6 +645,14 @@ class DebugServer(
                 )
             }
             sb.append(SALTO)
+            // Se imprime SIEMPRE, tambien cuando no hay sensor. Callar la
+            // linea de una rueda muda haria que "el detector no midio" se
+            // leyera igual que "el detector midio y no paso nada", que es
+            // exactamente la confusion que esta ruta viene a quitar.
+            sb.append("    ").append(
+                EstadoActual.detectorPinchazo?.invoke(r.name, l?.presionPsi)
+                    ?: "detector: el servicio no lo registro"
+            ).append(SALTO)
         }
         if (st.otras.isNotEmpty()) {
             sb.append(SALTO).append("ids que no son de rueda:").append(SALTO)
@@ -631,6 +661,13 @@ class DebugServer(
                 sb.append(SALTO)
             }
         }
+        // El umbral lo escribe el servicio que esta contestando ahora mismo.
+        // Repetirlo en un documento seria caer en la trampa de siempre: el
+        // documento no se entera el dia que alguien cambia la constante.
+        sb.append(SALTO).append("umbral de pinchazo: ")
+            .append(EstadoActual.umbralPinchazo ?: "el servicio no lo publico")
+        sb.append(SALTO)
+
         sb.append(SALTO).append("tramas buenas=").append(d.tramasBuenas)
         sb.append("  xor malo=").append(d.tramasXorMalo)
         sb.append("  largo raro=").append(d.tramasLargoRaro)
@@ -828,7 +865,7 @@ class DebugServer(
               /dtc?borrar=1    los borra (modo 04) y comprueba que se fueron
               /pids            que datos sabe dar la computadora del carro
               /obd-traza       que esta haciendo el lector del motor, sin tocarlo
-              /tpms            presiones y temperaturas de las cuatro llantas
+              /tpms            presiones, temperaturas y que ve el detector de pinchazo
               /probar-alerta   lanza el aviso de llanta baja para oir como suena
               /pin?mac=&pin=   a quien emparejar y con que PIN
               /armar-pin?pin=1234  deja al companero listo para teclear ese PIN

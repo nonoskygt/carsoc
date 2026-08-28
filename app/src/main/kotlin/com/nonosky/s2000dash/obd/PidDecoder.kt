@@ -186,20 +186,91 @@ object PidDecoder {
      * @param base 0x00 para el bloque 01-20, 0x20 para el 21-40, etc.
      */
     fun soportados(raw: String?, base: Int): List<Int> {
-        val d = payloadOf(raw, "01%02X".format(base)) ?: return emptyList()
-        if (d.size < 4) return emptyList()
-        val bits = ((d[0].toInt() and 0xFF) shl 24) or
-            ((d[1].toInt() and 0xFF) shl 16) or
-            ((d[2].toInt() and 0xFF) shl 8) or
-            (d[3].toInt() and 0xFF)
+        val bits = mascaraDe(raw, base) ?: return emptyList()
         return (0 until 32).filter { i ->
             (bits shr (31 - i)) and 1 == 1
         }.map { base + it + 1 }
     }
 
-    /** Hay otro bloque de 32 detras de este. */
+    /**
+     * ¿La ECU llegó a DECIR su máscara para este bloque?
+     *
+     * Es el mismo remedio que [Dtc.huboRespuesta] y por la misma razón: la
+     * ausencia de respuesta no es una respuesta. [soportados] devuelve lista
+     * vacía en tres situaciones que NO son la misma cosa —la ECU contestó "no
+     * soporto nada de este bloque", no contestó nada, o contestó media
+     * máscara— y las dos últimas son un fallo de enlace disfrazado de dato.
+     * Sin esta función, `/pids` pinta una lista vacía que cualquiera lee como
+     * "este carro no mide nada".
+     *
+     * Se exige confirmación POSITIVA: cuatro bytes enteros detrás del prefijo
+     * de ESTE bloque. Y ojo a la diferencia deliberada con los códigos de
+     * avería: allí un `NO DATA` sí cuenta como respuesta, porque al modo 03
+     * una ECU sana puede callarse por no tener averías. Aquí no: el `0100` es
+     * obligatorio en cualquier OBD-II, así que si no lo contesta, el que está
+     * mudo es el enlace.
+     */
+    fun huboMascara(raw: String?, base: Int): Boolean = mascaraDe(raw, base) != null
+
+    /**
+     * Hay otro bloque de 32 detrás de este.
+     *
+     * Ojo al llamarla: `false` significa "no hay más" Y TAMBIÉN "no pude
+     * leer". No se le cambia la firma porque quien pregunta ya no depende de
+     * ella para saberlo: consulta antes [huboMascara], igual que
+     * [Dtc.sinCodigos] consulta [Dtc.huboRespuesta] antes de declarar sano un
+     * carro con el que no ha hablado.
+     */
     fun hayMasBloques(raw: String?, base: Int): Boolean =
         soportados(raw, base).contains(base + 0x20)
+
+    /**
+     * Los 32 bits de la máscara del bloque [base], o `null` si la ECU no la dijo.
+     *
+     * `null` y `0` son lo que aquí se separa: `0` es la ECU contestando que no
+     * soporta nada de este bloque, `null` es que no hubo con quien hablar.
+     *
+     * No se apoya en [payloadOf] a propósito, por dos motivos:
+     *
+     * 1. `payloadOf` se queda con la PRIMERA trama y tira el resto. Para una
+     *    medida está bien —un régimen es un régimen—, pero la máscara de PIDs
+     *    es lo único que la norma manda COMBINAR: si varios módulos contestan
+     *    al mismo PID de índice, el conjunto soportado es el OR de TODAS las
+     *    máscaras. Hoy solo habla la ECU del motor y no muerde; el día que se
+     *    encienda `ATH1` o entre otro módulo, el mapa saldría recortado y en
+     *    silencio. Por eso el OR vive aquí y no en `payloadOf`: hacerlo allí
+     *    mezclaría lecturas de sensores, y un OR de dos temperaturas es un
+     *    número inventado.
+     * 2. `payloadOf` no distingue "no había trama" de "la trama venía corta":
+     *    devuelve `null` en el primer caso y bytes de menos en el segundo, y
+     *    los dos tienen que ser un fallo.
+     */
+    private fun mascaraDe(raw: String?, base: Int): Int? {
+        if (raw.isNullOrBlank()) return null
+        val prefijo = responsePrefix("01%02X".format(base)) ?: return null
+
+        var union: Int? = null
+        for (linea in raw.lines()) {
+            val hex = linea.uppercase().filter { it.isDigit() || it in 'A'..'F' }
+            val at = hex.indexOf(prefijo)
+            if (at < 0) continue
+
+            val cuerpo = hex.substring(at + prefijo.length)
+            // Media máscara es PEOR que ninguna: daría una lista corta con
+            // pinta de buena, el tablero dejaría de pedir sensores que el
+            // carro sí tiene y no habría un solo síntoma visible. Con menos de
+            // cuatro bytes enteros esta línea no aporta nada, ni siquiera a
+            // medias.
+            if (cuerpo.length < 8) continue
+
+            // Por Long y luego a Int porque `FFFFFFFF` no cabe en un Int con
+            // signo: `toIntOrNull(16)` devolvería null justo con la máscara
+            // más llena, que es la que más dolería perder.
+            val trozo = cuerpo.substring(0, 8).toLongOrNull(16) ?: continue
+            union = (union ?: 0) or trozo.toInt()
+        }
+        return union
+    }
 
     /** Nombre legible de los PIDs del modo 01 que valen la pena. */
     val NOMBRES: Map<Int, String> = mapOf(

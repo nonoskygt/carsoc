@@ -68,7 +68,198 @@ class PollScheduler(
         job = null
         runCatching { currentTransport?.close() }
         currentTransport = null
+        // Antes de publicar Disconnected: quien tenga un lote esperando merece
+        // saber que se paro el sondeo, en vez de comerse el plazo entero para
+        // leer un "se agoto" que no distingue un sondeo detenido de uno
+        // atascado dentro de un read.
+        descartarPendientes("el sondeo se detuvo antes de ejecutarlo")
         _state.update { it.copy(connection = ConnectionState.Disconnected) }
+    }
+
+    // ------------------------------------------------------------------
+    // COMANDOS A MANO, SOBRE LA MISMA SESION
+    // ------------------------------------------------------------------
+    //
+    // La ruta /at existia solo por el camino del dongle, que guarda su sesion
+    // en un campo y la comparte con un candado. Aqui eso no se puede copiar:
+    // la Elm327Session nace y muere DENTRO de runForever(), es una local de
+    // cada ciclo de conexion, y sacarla a un campo obligaria a publicar y
+    // anular una referencia que cambia con cada reconexion, con la garantia de
+    // que algun dia alguien la usaria despues de cerrada.
+    //
+    // Asi que el que pregunta no toca la sesion: deja el lote en una cola y se
+    // duerme. El bucle de sondeo, que es el unico que tiene la sesion en la
+    // mano, lo ejecuta entre dos turnos. Nadie abre un segundo enlace: el
+    // ELM327 atiende a UNO, y este proyecto ya pago cuatro minutos de
+    // reconexion por olvidarlo.
+
+    /**
+     * Un lote de comandos esperando turno.
+     *
+     * Objeto y no un par de listas porque quien pregunta y quien ejecuta son
+     * hilos distintos: el del puente HTTP se duerme en [terminado] y el del
+     * sondeo lo despierta. El `@Volatile` de [respuestas] sobra mientras el
+     * resultado se lea despues del latch —el latch ya ordena la memoria— y se
+     * deja puesto porque el dia que alguien lo lea sin esperar, el error seria
+     * de los que no dan la cara.
+     */
+    private class Lote(val comandos: List<String>) {
+        val terminado = java.util.concurrent.CountDownLatch(1)
+
+        @Volatile
+        var respuestas: List<String> = emptyList()
+    }
+
+    /**
+     * Lotes en espera. Acotada a proposito.
+     *
+     * Sin tope, un sondeo atascado dentro de un `read` nativo acumularia
+     * peticiones que nadie va a atender, y cada una se lleva un hilo del
+     * puente. El puente tiene cuatro: bastarian cuatro preguntas para dejar el
+     * radio incontactable, que es justo lo que no puede pasar en un carro.
+     */
+    private val lotesPendientes =
+        java.util.concurrent.ArrayBlockingQueue<Lote>(CUPO_LOTES)
+
+    /**
+     * Manda comandos crudos al ELM327 y espera la respuesta.
+     *
+     * BLOQUEA al hilo que llama, que es un hilo del puente HTTP y jamas el del
+     * sondeo. Devuelve una linea por comando con la misma forma que el camino
+     * del dongle —"comando -> respuesta"— para que la misma pregunta se lea
+     * igual venga por donde venga.
+     */
+    fun preguntar(comandos: List<String>): List<String> {
+        if (comandos.isEmpty()) return listOf("no se mando ningun comando")
+
+        // Todo o nada. Ejecutar hasta el prohibido y parar ahi dejaria un lote
+        // a medias, y quien lee la respuesta tendria que adivinar donde se
+        // corto y con que adaptador hablaron los de arriba.
+        val vetados = comandos.mapNotNull { c ->
+            porQueNoSePuede(c)?.let { "$c -> RECHAZADO: $it" }
+        }
+        if (vetados.isNotEmpty()) return vetados + "no se ejecuto nada del lote"
+
+        // Mirar el enlace antes de encolar no es una optimizacion: si el
+        // sondeo esta reconectando no hay nadie vaciando la cola, y quien
+        // pregunta se comeria el plazo entero para leerse un tiempo agotado
+        // que no explica por que.
+        val enlace = _state.value.connection
+        if (enlace != ConnectionState.Polling) {
+            return listOf(
+                "el sondeo no esta preguntando ahora mismo (esta en $enlace)",
+                "sin sesion viva no hay donde mandar comandos; espera a que reconecte",
+            )
+        }
+
+        val lote = Lote(comandos)
+        if (!lotesPendientes.offer(lote)) {
+            return listOf("hay $CUPO_LOTES lotes esperando turno; prueba en unos segundos")
+        }
+
+        if (lote.terminado.await(PLAZO_ESPERA_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            return lote.respuestas
+        }
+
+        // Sacarlo de la cola al rendirse. Un lote que se ejecuta cuando su
+        // autor ya se fue es peor que uno que no se ejecuta: estos comandos se
+        // mandan mirando el motor, y una respuesta que nadie va a leer solo
+        // sirve para robarle turnos a la aguja.
+        lotesPendientes.remove(lote)
+        return listOf(
+            "se agotaron los ${PLAZO_ESPERA_MS / 1000} s sin que el sondeo tomara el lote",
+            "el enlace figura en ${_state.value.connection}; si sigue asi, " +
+                "reinicia el motor con /fuente?cual=motor&on=0 y luego on=1",
+        )
+    }
+
+    /**
+     * Contesta a los que esperan que su lote se quedo sin sesion.
+     *
+     * Se llama al caerse el enlace y al detener el sondeo. Sin esto el unico
+     * final posible seria el plazo agotado, que dice "no te contesto nadie"
+     * cuando la verdad es "se cayo el enlace" — y con esa diferencia se decide
+     * si vale la pena reintentar o hay que ir a mirar el adaptador.
+     */
+    private fun descartarPendientes(motivo: String) {
+        while (true) {
+            val lote = lotesPendientes.poll() ?: return
+            lote.respuestas = lote.comandos.map { "$it -> NO EJECUTADO: $motivo" }
+            lote.terminado.countDown()
+        }
+    }
+
+    /**
+     * Un lote por vuelta, entre turnos y sobre la MISMA sesion.
+     *
+     * Lo que le cuesta al ritmo, con los numeros del reparto: 60 turnos con 30
+     * secundarios son 90 peticiones por periodo; a las ~10 lecturas/s de la
+     * K-line eso es un periodo de unos 9 s, y de ahi salen los 6,7 Hz del RPM.
+     * Cada comando a mano es UNA peticion mas. Un lote de doce se lleva algo
+     * mas de un segundo, pero no lo reparte: lo cobra de golpe. O sea que no
+     * es que el RPM baje a 5,9 Hz, es que la aguja se queda quieta un segundo
+     * y despues salta.
+     *
+     * Es aceptable porque esto se dispara A MANO desde la laptop, un lote cada
+     * vez y leyendo la respuesta antes de mandar el siguiente; nunca en bucle.
+     * Un hueco de un segundo cada varios minutos no cambia como se lee el
+     * tablero, y si se alargara, la vista ya pinta en gris lo rancio en vez de
+     * fingir que el dato es de ahora. Lo que no seria aceptable es un hueco
+     * SIN TECHO, y para eso esta [PLAZO_LOTE_MS].
+     *
+     * Uno por vuelta y no la cola entera: entre dos lotes se cuela una lectura
+     * de RPM, asi preguntar dos veces seguidas no clava la aguja el doble.
+     */
+    private fun atenderComandos(session: Elm327Session) {
+        val lote = lotesPendientes.poll() ?: return
+        try {
+            lote.respuestas = ejecutar(session, lote.comandos)
+        } catch (e: Exception) {
+            lote.respuestas = listOf("ERROR: ${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            // En finally sin excusas: un lote que no despierta a su autor lo
+            // deja doce segundos mirando el reloj para leer algo que ya se
+            // sabia aqui.
+            lote.terminado.countDown()
+        }
+    }
+
+    private fun ejecutar(session: Elm327Session, comandos: List<String>): List<String> {
+        val salida = mutableListOf<String>()
+        val limite = clock() + PLAZO_LOTE_MS
+        var huboAt = false
+
+        for (c in comandos) {
+            if (clock() >= limite) {
+                salida += "$c -> NO EJECUTADO: el lote agoto sus " +
+                    "${PLAZO_LOTE_MS / 1000} s y la aguja no puede esperar mas"
+                continue
+            }
+            if (normalizado(c).startsWith("AT")) huboAt = true
+            salida += "$c -> " + (session.queryRaw(c, PLAZO_COMANDO_MS) ?: "sin respuesta")
+        }
+
+        // Devolver el adaptador a como lo dejo initialize().
+        //
+        // Los cuatro de formato NO rompen la decodificacion —se comprobo
+        // leyendo PidDecoder.payloadOf: parte por lineas, se traga el eco
+        // porque lleva el modo 01 y no el 41, busca el prefijo DENTRO de la
+        // linea asi que el encabezado de ATH1 le da igual, y filtra todo lo
+        // que no sea hexadecimal, asi que los espacios de ATS1 tampoco
+        // molestan—. Pero engordan cada respuesta, y sobre un enlace que ya va
+        // al limite eso son lecturas que dejan de caber.
+        //
+        // No se hila mas fino sobre cuales AT tocan estado y cuales no porque
+        // la lista de los que lo tocan en silencio (ATAT, ATST, ATCAF, ATCFC,
+        // ATSH, ATTA...) es mas larga que la de los que no, y reponer cuesta
+        // cinco ordenes que el adaptador atiende el solo, sin salir a la
+        // K-line: unas decenas de milisegundos que no le quitan turno a nadie.
+        if (huboAt) {
+            for (a in AJUSTES_DE_INICIO) runCatching { session.queryRaw(a, PLAZO_AJUSTE_MS) }
+            salida += "(repuestos " + AJUSTES_DE_INICIO.joinToString(" ") +
+                ", que es lo que fija initialize)"
+        }
+        return salida
     }
 
     private suspend fun runForever() {
@@ -107,6 +298,11 @@ class PollScheduler(
             } finally {
                 runCatching { transport?.close() }
                 if (currentTransport === transport) currentTransport = null
+                // La sesion que iba a ejecutar los lotes acaba de morir con el
+                // transporte. Dejarlos en la cola solo cambia "se cayo el
+                // enlace" por "se agoto el plazo", y esas dos respuestas piden
+                // cosas distintas de quien las lee.
+                descartarPendientes("el enlace se cayo antes de ejecutarlo")
             }
 
             coroutineContext.ensureActive()
@@ -143,6 +339,10 @@ class PollScheduler(
             Plan.secondaryFor(cycle)
                 ?.takeIf { it !in disabled }
                 ?.let { readAndApply(session, it) }
+
+            // Al final de la vuelta y no al principio: asi el RPM de este
+            // ciclo ya esta publicado cuando el lote se lleve el enlace.
+            atenderComandos(session)
 
             cycle++
             // Ceder el hilo sin frenar el ritmo: el round-trip del K-line ya
@@ -329,5 +529,110 @@ class PollScheduler(
         const val UNSUPPORTED_THRESHOLD = 3
         const val DEAD_LINK_THRESHOLD = 6
         const val MAX_BACKOFF_MS = 10_000L
+
+        /** Lotes de comandos a mano que caben esperando turno. */
+        const val CUPO_LOTES = 2
+
+        /**
+         * Lo que se le concede a UN comando suelto.
+         *
+         * Cuatro segundos y no los 350 ms del sondeo: por aqui se pregunta lo
+         * que no se pregunta a diario —mapas de PIDs, modo 09, modo 03— y esas
+         * respuestas llegan en varias tramas y tardan. Es el mismo plazo que
+         * usa el camino del dongle, para que la misma pregunta se conteste
+         * igual venga por donde venga.
+         */
+        const val PLAZO_COMANDO_MS = 4_000L
+
+        /**
+         * Techo del lote ENTERO, que es lo que protege a la aguja.
+         *
+         * Doce comandos sin respuesta a cuatro segundos cada uno serian casi
+         * un minuto con el tacometro clavado, y eso ya no es un hueco: es el
+         * tablero mintiendo. Pasado el techo, los que queden se contestan
+         * diciendo que no se ejecutaron, que es informacion y no una excusa.
+         */
+        const val PLAZO_LOTE_MS = 8_000L
+
+        /**
+         * Lo que espera quien pregunta, contando la espera a que le toque.
+         *
+         * El techo del lote mas margen para que el sondeo lo recoja. No mucho
+         * mas: /at no esta entre las RUTAS_LENTAS del puente y quien pregunta
+         * esta mirando la terminal, asi que vale mas una respuesta que diga
+         * "no lo tomo nadie" que un cliente colgado.
+         */
+        const val PLAZO_ESPERA_MS = 12_000L
+
+        /** Los ajustes locales son inmediatos: no salen a la K-line. */
+        private const val PLAZO_AJUSTE_MS = 500L
+
+        /**
+         * Lo que [Elm327Session.initialize] deja fijado y aqui se repone.
+         *
+         * No lleva ATSP5 a proposito: reponer el protocolo dispararia otro BUS
+         * INIT, que son segundos. Los que estan son ordenes que el adaptador
+         * atiende el solo, sin tocar el bus del carro.
+         */
+        private val AJUSTES_DE_INICIO = listOf("ATE0", "ATL0", "ATS0", "ATH0", "ATAT1")
+
+        /**
+         * El ELM327 se come los espacios DENTRO del comando: "AT SP 0" y
+         * "ATSP0" son la misma orden para el. Y /at solo hace trim y uppercase,
+         * asi que si el filtro mirara el texto tal cual llega bastaria un
+         * espacio para colarle al sondeo un cambio de protocolo.
+         */
+        private fun normalizado(comando: String): String =
+            comando.uppercase().filter { !it.isWhitespace() }
+
+        /**
+         * Por que este comando no puede ir por aqui, o `null` si si puede.
+         *
+         * El corte no es "peligroso/inofensivo" sino "¿puede el sondeo seguir
+         * sin enterarse?". Los de formato —ATE1, ATH1, ATS1, ATL1— si pueden:
+         * el parser los aguanta y ademas se reponen al cerrar el lote, asi que
+         * pasan. Estos no. Dejan el adaptador hablando otro idioma mientras el
+         * bucle sigue pidiendo RPM como si nada, y lo unico que lo saca es
+         * acumular DEAD_LINK_THRESHOLD lecturas muertas para tirar el socket y
+         * reconectar entero — contra este clon eso ya se midio costando CUATRO
+         * MINUTOS cuando se reconecta con prisa. Nada de lo que se averigua
+         * preguntando vale ese apagon.
+         *
+         * Rechazar no quita funcionalidad: si lo que se quiere es un adaptador
+         * virgen, /fuente?cual=motor&on=0 seguido de on=1 lo deja limpio, y
+         * /pids y /dtc ya abren su propia sesion sabiendo esperar a que el
+         * adaptador suelte el canal.
+         *
+         * `internal` para que la prueba pueda afirmarlo en la JVM, sin carro.
+         */
+        internal fun porQueNoSePuede(comando: String): String? {
+            val c = normalizado(comando)
+            return when {
+                c == "ATZ" || c == "ATD" || c == "ATWS" ->
+                    "reinicia el adaptador: se pierde el protocolo y vuelve el eco, " +
+                        "y el sondeo tarda $DEAD_LINK_THRESHOLD lecturas muertas en " +
+                        "enterarse. Para empezar limpio: /fuente?cual=motor&on=0 y luego on=1"
+                c.startsWith("ATSP") ->
+                    "cambia el protocolo bajo los pies del sondeo, que seguiria " +
+                        "preguntando igual. initialize() ya fija ATSP5 y cae solo a " +
+                        "ATSP0 si el carro no contesta"
+                c.startsWith("ATMA") || c.startsWith("ATMR") || c.startsWith("ATMT") ->
+                    "los modos monitor no devuelven el prompt '>': el hilo del sondeo " +
+                        "esperaria el plazo entero y despues leeria el chorro como si " +
+                        "fueran respuestas a otras preguntas"
+                c == "ATLP" ->
+                    "duerme el adaptador, y con el se va el enlace"
+                c.startsWith("ATPP") || c.startsWith("ATBRD") ||
+                    c.startsWith("ATBRT") || c.startsWith("ATIB") ->
+                    "toca parametros del propio adaptador, y los PP se guardan en " +
+                        "memoria NO volatil: eso sobrevive a desenchufarlo y desde aqui " +
+                        "no hay como deshacerlo"
+                c == "04" ->
+                    "borra los codigos de averia de verdad, y con ellos la trama " +
+                        "congelada y los monitores de emisiones. Para eso esta " +
+                        "/dtc?borrar=1, que para el sondeo antes y avisa si el motor gira"
+                else -> null
+            }
+        }
     }
 }

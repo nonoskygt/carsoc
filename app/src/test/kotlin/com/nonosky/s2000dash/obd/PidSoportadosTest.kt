@@ -180,13 +180,37 @@ class PidSoportadosTest {
     }
 
     @Test
-    fun `una trama de mas detras no cambia la lectura`() {
-        // Se queda con la primera trama valida. Importa fijarlo: si un dia se
-        // quedara con la ultima, un eco tardio o un resto del buffer podria
-        // sustituir el mapa bueno por otro sin que nadie lo notara.
+    fun `dos tramas del mismo bloque se suman con OR, no se pisan`() {
+        // Esta prueba decia antes lo contrario: que se queda con la PRIMERA
+        // trama y tira el resto. Se cambio a conciencia, porque eso no es lo
+        // que manda la norma: si varios modulos contestan al mismo PID de
+        // indice, el conjunto soportado es el OR de TODAS las mascaras.
+        //
+        // Con ATH0 y una sola ECU en el bus el fallo nunca mordio. El dia que
+        // se encienda ATH1 o entre otro modulo, el mapa saldria recortado y
+        // sin avisar, que es el peor modo de fallar: el tablero dejaria de
+        // pedir sensores que el carro si tiene y nadie veria un sintoma.
         assertEquals(
-            PIDS_DEL_CARRO,
+            (0x01..0x20).toList(),
             PidDecoder.soportados("4100BE3EF810\r4100FFFFFFFF\r\r>", 0x00),
+        )
+
+        // Dos mascaras disjuntas: cada una aporta su mitad y ninguna borra a
+        // la otra. Quedandose con la primera saldria solo el 0x01; con la
+        // ultima, solo el 0x20. El OR es el unico resultado correcto.
+        assertEquals(
+            listOf(0x01, 0x20),
+            PidDecoder.soportados("410080000000\r410000000001\r\r>", 0x00),
+        )
+        // Y el bit que anuncia el bloque siguiente lo puede poner la segunda
+        // trama: si se perdiera, el recorrido se cortaria antes de tiempo.
+        assertTrue(PidDecoder.hayMasBloques("410080000000\r410000000001", 0x00))
+
+        // El OR no se cruza entre bloques: una trama del 4120 no puede meter
+        // bits en el mapa del 4100 por muy llena que venga.
+        assertEquals(
+            listOf(0x01),
+            PidDecoder.soportados("410080000000\r4120FFFFFFFF\r\r>", 0x00),
         )
     }
 
@@ -234,17 +258,106 @@ class PidSoportadosTest {
         assertEquals(emptyList<Int>(), PidDecoder.soportados("4100BE3EF81", 0x00))
     }
 
+    // --- Respuesta o silencio: la trampa que ya mordio tres veces -----------
+    //
+    // Primero fue `Dtc.leerLista` buscando el prefijo con indexOf. Luego
+    // `esFalloDeEnlace` dando por sano todo lo que no sonara a error conocido,
+    // y la pantalla pinto SIN AVERIAS EN VERDE con el bus caido. Luego el
+    // borrado comprobando `contains("44")`. Aqui vive la cuarta cara de lo
+    // mismo: una lista vacia de PIDs que se lee como "este carro no mide
+    // nada" cuando lo cierto es que nadie contesto.
+
     @Test
-    fun `hayMasBloques con basura dice que no, y eso es lo peligroso`() {
-        // Se fija a proposito el comportamiento actual: sin respuesta, la
-        // funcion contesta `false`, o sea "no hay mas bloques". Pero lo cierto
-        // es "no lo se". Es la misma trampa que ya mordio con los DTC — la
-        // ausencia de respuesta no es una respuesta — y aqui el sintoma seria
-        // un mapa de PIDs truncado en silencio, no un carro declarado sano.
-        assertFalse(PidDecoder.hayMasBloques(null, 0x00))
-        assertFalse(PidDecoder.hayMasBloques("SEARCHING...", 0x00))
-        assertFalse(PidDecoder.hayMasBloques("NO DATA", 0x00))
-        // Si algun dia esto se separa en "no hay mas" y "no se pudo leer",
-        // esta prueba es la que hay que cambiar, y a conciencia.
+    fun `mascara a cero es una RESPUESTA, no un silencio`() {
+        // El caso que obliga a separar las dos cosas: la ECU contesto y dijo
+        // "no soporto nada de este bloque". La lista sale vacia igual que con
+        // el silencio, pero aqui el enlace funciono y el dato es bueno.
+        assertTrue(PidDecoder.huboMascara("410000000000", 0x00))
+        assertEquals(emptyList<Int>(), PidDecoder.soportados("410000000000", 0x00))
+        // Y la respuesta buena del carro, obviamente, tambien es respuesta.
+        assertTrue(PidDecoder.huboMascara(RESPUESTA_REAL, 0x00))
+    }
+
+    @Test
+    fun `el silencio y el SEARCHING no son una respuesta`() {
+        // `SEARCHING...` es literalmente lo que contesto el ELM327 con el
+        // carro apagado el dia que la pantalla de averias dio el carro por
+        // sano. Ninguna lista de errores lo reconocia y ninguna linea empezaba
+        // por el prefijo, asi que salia vacio y el vacio se leia como
+        // "ninguna averia". Aqui saldria como "ningun sensor".
+        val mudos = listOf<String?>(
+            null, "", "   ", "\r\n>",
+            "SEARCHING...", "BUS INIT: ...OK", "NO DATA", "NODATA", "STOPPED",
+            "?", "UNABLE TO CONNECT", "CAN ERROR", "DATA ERROR", "ERROR",
+            "ZZZZ",
+            "7F0012",                            // respuesta negativa de la ECU
+            "410C1AF8",                          // la respuesta de OTRO pid
+            "410D64",
+            "BUS INIT: ERROR\r\r>",
+            "SEARCHING...\rUNABLE TO CONNECT\r\r>",
+        )
+        for (s in mudos) {
+            assertFalse("no hubo mascara para '$s'", PidDecoder.huboMascara(s, 0x00))
+            assertEquals("debio ser vacio para '$s'", emptyList<Int>(), PidDecoder.soportados(s, 0x00))
+        }
+    }
+
+    @Test
+    fun `NO DATA no cuenta como mascara, aunque en los codigos de averia si cuente`() {
+        // Diferencia deliberada, y esta prueba existe para que nadie "unifique"
+        // las dos funciones mas adelante creyendo que arregla algo:
+        //
+        // - Al modo 03, una ECU sana puede callarse porque no tiene averias, y
+        //   ahi `NO DATA` es una respuesta legitima.
+        // - El `0100` es obligatorio para cualquier OBD-II. Si no lo contesta,
+        //   el que esta mudo es el enlace, no el mapa de PIDs.
+        assertFalse(PidDecoder.huboMascara("NO DATA", 0x00))
+        assertTrue(Dtc.huboRespuesta("NO DATA"))
+    }
+
+    @Test
+    fun `media mascara es un fallo, no una lista corta`() {
+        // Con menos de cuatro bytes enteros la lista saldria corta y con pinta
+        // de buena: el tablero dejaria de pedir sensores que el carro si tiene
+        // y no habria un solo sintoma visible. Por eso media mascara no es
+        // media respuesta, es ninguna.
+        for (corta in listOf("4100", "4100BE", "4100BE3E", "4100BE3EF8", "4100BE3EF81")) {
+            assertFalse("media mascara no es respuesta: '$corta'", PidDecoder.huboMascara(corta, 0x00))
+            assertEquals(emptyList<Int>(), PidDecoder.soportados(corta, 0x00))
+        }
+        // Cuatro bytes justos si lo son, y un nibble suelto detras (respuesta
+        // cortada a mitad de byte) no puede tirar los cuatro que si llegaron.
+        assertTrue(PidDecoder.huboMascara("4100BE3EF810", 0x00))
+        assertTrue(PidDecoder.huboMascara("4100BE3EF8100", 0x00))
+    }
+
+    @Test
+    fun `la respuesta de otro bloque no vale como respuesta de este`() {
+        // El recorrido pregunta bloque a bloque y la respuesta anterior puede
+        // seguir en el buffer. Que no cuente como mascara del bloque nuevo es
+        // lo que impide dar por leido un mapa que no se leyo.
+        assertFalse(PidDecoder.huboMascara(RESPUESTA_REAL, 0x20))
+        assertFalse(PidDecoder.huboMascara("4120BE3EF810", 0x00))
+        assertTrue(PidDecoder.huboMascara("4120BE3EF810", 0x20))
+    }
+
+    @Test
+    fun `hayMasBloques sigue diciendo que no sin respuesta, y por eso hay que preguntar antes`() {
+        // Esta prueba pedia por escrito que se cambiara el dia que se separara
+        // "no hay mas" de "no se pudo leer". Ya esta separado, y se fija como
+        // quedo: `hayMasBloques` NO cambia de firma —sigue contestando `false`
+        // sin respuesta, que sigue siendo mentira por si sola— pero ya no es
+        // lo unico que hay. Quien recorre bloques pregunta primero por
+        // `huboMascara`, igual que `sinCodigos` pregunta por `huboRespuesta`
+        // antes de declarar sano un carro con el que no ha hablado.
+        for (mudo in listOf<String?>(null, "SEARCHING...", "NO DATA")) {
+            assertFalse("hayMasBloques dice que no para '$mudo'", PidDecoder.hayMasBloques(mudo, 0x00))
+            assertFalse("...y huboMascara explica por que: '$mudo'", PidDecoder.huboMascara(mudo, 0x00))
+        }
+        // Con respuesta de verdad, las dos coinciden y ninguna miente.
+        assertTrue(PidDecoder.huboMascara("410000000001", 0x00))
+        assertTrue(PidDecoder.hayMasBloques("410000000001", 0x00))
+        assertTrue(PidDecoder.huboMascara("410000000000", 0x00))
+        assertFalse(PidDecoder.hayMasBloques("410000000000", 0x00))
     }
 }

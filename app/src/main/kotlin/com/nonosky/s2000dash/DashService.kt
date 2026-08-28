@@ -185,6 +185,15 @@ class DashService : Service() {
             }
         }
 
+        // El hermano del boton de prueba: aquel demuestra que la alarma suena,
+        // este que hay algo detras dispuesto a tocarla. Se registran juntos
+        // porque por separado cada uno engaña.
+        EstadoActual.umbralPinchazo = "perder %.1f PSI o mas en %ds seguidos".format(
+            PSI_CAIDA_PINCHAZO, MS_VENTANA_PINCHAZO / 1000,
+        )
+        EstadoActual.detectorPinchazo = { clave, psiAhora -> estadoDetector(clave, psiAhora) }
+
+
         // El diagnostico del BMS se registra SIEMPRE, no solo con la bateria
         // encendida. Hacia falta apagar el vigilante para poder mirar por que
         // fallaba, y apagarlo quitaba justo la ruta con la que se mira. Una
@@ -280,6 +289,14 @@ class DashService : Service() {
                             connection = ConnectionState.Disconnected,
                         )
                         runCatching { EstadoActual.alCambiarObd?.invoke() }
+                        // El gancho de /at apuntaba a ESTE sondeo, que acaba de
+                        // pararse. Si se quedara puesto, un /at durante la
+                        // lectura de codigos encolaria comandos contra un
+                        // sondeo muerto y esperaria el plazo entero para
+                        // decirlo, ocupando de paso uno de los cuatro hilos del
+                        // puente mientras /dtc va por su medio minuto. El
+                        // `finally` lo repone al llamar a arrancarObdInterno().
+                        EstadoActual.comandoObd = null
                         salida += "sondeo interno detenido para dejarle el ELM327 al lector"
                     }
                     if (teniaDongle) {
@@ -381,12 +398,57 @@ class DashService : Service() {
             }
         }
 
-        EstadoActual.pidsSoportados = {
+        EstadoActual.pidsSoportados = fun(): List<String> {
             val salida = mutableListOf<String>()
+            // Si el sondeo esta vivo, se le pregunta A EL. Abrir un segundo
+            // enlace al mismo ELM327 no es una alternativa peor: es la
+            // colision que este proyecto ya se comio dos veces. Medido hoy con
+            // el sondeo corriendo, esta misma ruta contestaba
+            //
+            //   RFCOMM fallo por todas las vias: inseguro-SPP=read failed...
+            //
+            // porque el Steren solo atiende UN canal. Y en el peor caso no
+            // falla: acepta los dos y mezcla las respuestas, o sea inventa el
+            // mapa de lo que el carro sabe medir.
+            val porElSondeo = EstadoActual.comandoObd
+            if (porElSondeo != null) {
+                salida += "(preguntando por el enlace que ya esta abierto)"
+                var base = 0x00
+                var vueltas = 0
+                while (vueltas < 4) {
+                    val cmd = "01%02X".format(base)
+                    val raw = porElSondeo(listOf(cmd)).firstOrNull()
+                        ?.substringAfter("-> ", "")
+                        ?.takeIf { it.isNotBlank() }
+                    salida += "--- $cmd -> ${raw ?: "sin respuesta"}"
+                    if (!com.nonosky.s2000dash.obd.PidDecoder.huboMascara(raw, base)) {
+                        salida += "  *** SIN RESPUESTA AL $cmd: la ECU no dijo su mascara ***"
+                        salida += "  *** NO se sabe que soporta este carro. Esto NO es una lista vacia. ***"
+                        break
+                    }
+                    val lista = com.nonosky.s2000dash.obd.PidDecoder.soportados(raw, base)
+                    if (lista.isEmpty()) {
+                        salida += "  la ECU contesta y dice que no soporta NADA de este bloque"
+                    }
+                    for (pid in lista) {
+                        if (pid % 0x20 == 0) continue
+                        val n = com.nonosky.s2000dash.obd.PidDecoder.NOMBRES[pid]
+                        salida += "  01%02X  %s".format(pid, n ?: "(sin nombre conocido)")
+                    }
+                    if (!com.nonosky.s2000dash.obd.PidDecoder.hayMasBloques(raw, base)) break
+                    base += 0x20
+                    vueltas++
+                }
+                return salida
+            }
             val adapter = radioInterna
             val dev = runCatching { adapter?.getRemoteDevice(MAC_OBD) }.getOrNull()
             if (dev == null) salida += "ERROR: no se pudo resolver el adaptador"
             else {
+                // Sin sondeo no hay a quien preguntarle, asi que aqui SI toca
+                // abrir enlace propio — y es seguro justamente porque no hay
+                // ninguno con quien chocar.
+                salida += "(el sondeo esta apagado: se abre un enlace propio)"
                 val t = com.nonosky.s2000dash.obd.SppTransport(dev, adapter)
                 try {
                     t.connect()
@@ -398,8 +460,28 @@ class DashService : Service() {
                         val cmd = "01%02X".format(base)
                         val raw = sesion.queryRaw(cmd)
                         salida += "--- $cmd -> ${raw ?: "sin respuesta"}"
+                        // Antes de imprimir nada, saber si la ECU habló.
+                        //
+                        // Sin esta guarda el silencio, el `SEARCHING...` y la
+                        // máscara a medias salían por la misma puerta que "no
+                        // soporta nada": un `break` con la lista vacía, y
+                        // /pids pintando un hueco que se lee como "este carro
+                        // no mide nada". Es la misma trampa que ya mordió con
+                        // los códigos de avería — la ausencia de respuesta no
+                        // es una respuesta — y aquí el daño sería mandar a
+                        // alguien a buscar un sensor que el carro sí tiene.
+                        if (!com.nonosky.s2000dash.obd.PidDecoder.huboMascara(raw, base)) {
+                            salida += "  *** SIN RESPUESTA AL $cmd: la ECU no dijo su mascara ***"
+                            salida += "  *** NO se sabe que soporta este carro. Esto NO es una lista vacia. ***"
+                            salida += "  (silencio, SEARCHING, basura, o mascara de menos de 4 bytes)"
+                            break
+                        }
                         val lista = com.nonosky.s2000dash.obd.PidDecoder.soportados(raw, base)
-                        if (lista.isEmpty()) break
+                        // Lo contrario del caso de arriba, y por eso se dice
+                        // con todas las letras: aquí la ECU sí contestó.
+                        if (lista.isEmpty()) {
+                            salida += "  la ECU contesta y dice que no soporta NADA de este bloque"
+                        }
                         for (pid in lista) {
                             if (pid % 0x20 == 0) continue  // el indice del bloque siguiente
                             val n = com.nonosky.s2000dash.obd.PidDecoder.NOMBRES[pid]
@@ -415,7 +497,7 @@ class DashService : Service() {
                     runCatching { t.close() }
                 }
             }
-            salida
+            return salida
         }
         EstadoActual.probarSpp = { mac ->
             val salida = mutableListOf<String>()
@@ -582,9 +664,28 @@ class DashService : Service() {
      * distingue —las dos acaban abajo— y para cuando salta, la rapida ya lleva
      * rato rodando desinflada.
      *
-     * Guarda: (psi, cuando).
+     * Guarda: (psi, cuando, ventanas ya comparadas).
+     *
+     * La cuenta de ventanas no es un historial: es un entero por rueda que
+     * dice si el detector llego a comparar alguna vez. Sin ella, un viaje sin
+     * alarma no distingue "la presion aguanto" de "nunca hubo dos muestras
+     * separadas por la ventana", y lo segundo es una averia del detector. La
+     * edad de la referencia sola no vale para eso: al llegar, con los sensores
+     * dormidos, las cuatro ruedas tienen la edad por las nubes.
+     *
+     * Los tres valores van en una TERNA y no en tres campos sueltos porque el
+     * puente HTTP lee desde otro hilo. Sueltos, podria coger la presion de una
+     * ronda con la hora de la siguiente y anunciar una caida que no ocurrio,
+     * justo en la ruta que existe para saber si creerle al detector.
+     *
+     * Que sea ConcurrentHashMap basta: escribe SOLO el hilo `tpms-lector`
+     * —revisarPresiones cuelga de `alCambiar`, que se invoca ahi y en ningun
+     * otro sitio— y lee el hilo del puente. Un candado, ademas de sobrar,
+     * meteria al servidor de depuracion dentro del lazo del detector: una
+     * consulta lenta podria retrasar el aviso de un pinchazo.
      */
-    private val presionAnterior = java.util.concurrent.ConcurrentHashMap<String, Pair<Float, Long>>()
+    private val presionAnterior =
+        java.util.concurrent.ConcurrentHashMap<String, Triple<Float, Long, Int>>()
 
     /** Ruedas ya avisadas por pinchazo, para no repetir. */
     private val ruedasPinchadas = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
@@ -653,11 +754,11 @@ class DashService : Service() {
 
         val previa = presionAnterior[clave]
         if (previa == null) {
-            presionAnterior[clave] = psi to ahora
+            presionAnterior[clave] = Triple(psi, ahora, 0)
             return
         }
 
-        val (psiAntes, cuando) = previa
+        val (psiAntes, cuando, ventanas) = previa
         val transcurrido = ahora - cuando
         if (transcurrido < MS_VENTANA_PINCHAZO) return
 
@@ -670,9 +771,67 @@ class DashService : Service() {
         // Se recoloca la referencia SIEMPRE, haya saltado o no: si no, una
         // fuga lenta acabaria acumulando diferencia contra una medida de hace
         // horas y se anunciaria como pinchazo cuando no lo es.
-        presionAnterior[clave] = psi to ahora
+        //
+        // La cuenta sube AQUI y en ningun otro sitio, porque este es el unico
+        // punto al que se llega habiendo comparado de verdad contra una
+        // muestra de hace la ventana entera. Las tres salidas de arriba —sin
+        // presion, lectura rancia, ventana corta— no comparan nada, y contar
+        // ahi seria mentir sobre lo unico que este numero sirve para decir.
+        presionAnterior[clave] = Triple(psi, ahora, ventanas + 1)
         if (caida < PSI_CAIDA_PINCHAZO / 2f) ruedasPinchadas.remove(clave)
     }
+
+    /**
+     * Que sabe el detector de pinchazo de una rueda, en una linea.
+     *
+     * Existe porque /probar-alerta demuestra que la alarma SUENA, no que algo
+     * la vaya a disparar. Sin esto, un viaje entero en silencio se lee igual
+     * tanto si el detector comparo y la presion aguanto como si nunca llego a
+     * comparar, y lo segundo significa que no funciona.
+     *
+     * No abre estado nuevo ni escribe nada: mira los mismos tres mapas que usa
+     * [revisarPinchazo]. Lo llama el hilo del puente HTTP.
+     */
+    private fun estadoDetector(clave: String, psiAhora: Float?): String {
+        val marcas = buildString {
+            if (ruedasPinchadas[clave] == true) append("  PINCHADA")
+            if (ruedasAvisadas[clave] == true) append("  AVISADA")
+        }
+        val previa = presionAnterior[clave]
+            ?: return "detector: SIN REFERENCIA, no ha comparado nunca" +
+                " (sensor sin presion o lectura rancia)$marcas"
+        val (psiRef, cuando, ventanas) = previa
+        val edadS = (System.currentTimeMillis() - cuando) / 1000
+        val ventanaS = MS_VENTANA_PINCHAZO / 1000
+        val caida = psiAhora?.let { psiRef - it }
+        return buildString {
+            append("detector: ref ").append("%.1f".format(psiRef)).append(" psi")
+            append(" de hace ").append(edadS).append("s")
+            // La edad es lo que dice si la ventana se llego a cumplir. Ojo con
+            // leer una edad muy por encima de la ventana como "esta esperando":
+            // significa lo contrario, que dejaron de entrar medidas buenas —en
+            // cuanto entra una, la referencia se recoloca y la edad cae a cero.
+            if (edadS >= ventanaS) {
+                append(" (ventana de ").append(ventanaS).append("s CUMPLIDA)")
+            } else {
+                append(" (faltan ").append(ventanaS - edadS).append("s para la ventana)")
+            }
+            append("  caida ")
+            if (caida == null) {
+                append("?? el sensor no da presion ahora")
+            } else {
+                // En negativo a proposito: se pinta lo que la presion HIZO
+                // contra lo que tendria que hacer para disparar, en las mismas
+                // unidades y con el mismo signo. Un hueco aqui es que no mide.
+                append("%+.1f".format(-caida))
+                append(" de -").append("%.1f".format(PSI_CAIDA_PINCHAZO)).append(" PSI")
+                append(" (faltan ").append("%.1f".format(PSI_CAIDA_PINCHAZO - caida)).append(")")
+            }
+            append("  ventanas comparadas=").append(ventanas)
+            append(marcas)
+        }
+    }
+
 
     private fun avisarPresionBaja(
         lectura: com.nonosky.s2000dash.tpms.LecturaRueda,
@@ -894,6 +1053,18 @@ class DashService : Service() {
             alcanceInterno = alcance
             sondeoInterno = sched
             sched.start()
+            // El canal AT por la radio interna, que es donde faltaba.
+            //
+            // /at solo funcionaba con el dongle porque solo arrancarObd()
+            // registraba este gancho. En la configuracion que se usa a diario
+            // —radio interna, dongle fuera— la ruta contestaba "el servicio no
+            // registro el canal AT": la herramienta con la que se depura el
+            // OBD estaba muerta justo donde hace falta.
+            //
+            // Va contra el sondeo y no contra un enlace nuevo: el ELM327
+            // atiende a UNO, y montarle un segundo tumbaria el que mueve la
+            // aguja.
+            EstadoActual.comandoObd = { cmds -> sched.preguntar(cmds) }
 
             // Publicar su estado donde lo ven la vista y el puente. Sin esto
             // el sondeo corre y nadie se entera: el tablero se queda en
@@ -935,6 +1106,13 @@ class DashService : Service() {
         runCatching { lectorObd?.detener() }
         lectorObd = null
         EstadoActual.lectorObd = null
+
+        // El canal AT lo pone el que este sondeando —dongle o radio interna—
+        // y aqui se paran los dos, asi que se desengancha una sola vez y fuera
+        // del bloque del dongle, que es donde estaba y donde parecia suyo.
+        // Dejarlo puesto apuntando a un sondeo parado seria peor que no
+        // tenerlo: /at contestaria con la excusa del enlace en vez de decir
+        // claro que no hay nadie sondeando.
         EstadoActual.comandoObd = null
 
         if (vigilante != null) partes += "vigilante de bateria detenido"
@@ -1052,12 +1230,18 @@ class DashService : Service() {
                         if (sondeoInterno == null) arrancarObdInterno()
                         "motor encendido por la radio interna"
                     } else {
+                        val teniaSondeo = sondeoInterno != null
                         runCatching { enlaceInterno?.cancel() }
                         runCatching { sondeoInterno?.stop() }
                         runCatching { alcanceInterno?.cancel() }
                         enlaceInterno = null
                         sondeoInterno = null
                         alcanceInterno = null
+                        // El gancho de /at solo se suelta si era NUESTRO. Si
+                        // quien sondea es el dongle —"motor-dongle" se apaga
+                        // aparte— quitarselo aqui le mataria el canal AT a un
+                        // lector que sigue vivo y contestando.
+                        if (teniaSondeo) EstadoActual.comandoObd = null
                         EstadoActual.ultimo = VehicleState()
                         runCatching { EstadoActual.alCambiarObd?.invoke() }
                         "motor apagado"
@@ -1120,6 +1304,11 @@ class DashService : Service() {
         runCatching { lectorObd?.detener() }
         lectorObd = null
         EstadoActual.lectorObd = null
+        // EstadoActual es del proceso, no del servicio: sobrevive a este
+        // onDestroy. Con el gancho puesto, el puente —que puede seguir en pie—
+        // ofreceria un canal AT contra un sondeo que ya no existe. Faltaba
+        // tambien para el dongle, no solo para la radio interna.
+        EstadoActual.comandoObd = null
         runCatching { vigilante?.detener() }
         vigilante = null
         EstadoActual.vigilanteBateria = null

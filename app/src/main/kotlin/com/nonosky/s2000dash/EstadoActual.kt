@@ -205,6 +205,32 @@ object EstadoActual {
      * —y si se oye por encima de la musica— es esperar a tener un pinchazo.
      */
     var probarAlertaLlanta: (() -> String)? = null
+    /**
+     * Que sabe el detector de pinchazo de UNA rueda, en una linea.
+     *
+     * Va por gancho y no abriendo los mapas del servicio: un mapa mutable
+     * publicado es un mapa que alguien acaba escribiendo, y estos los escribe
+     * el hilo del TPMS y nadie mas.
+     *
+     * Recibe el nombre de la rueda y la presion de ahora mismo. La presion se
+     * le pasa porque quien pregunta ya la tiene en la mano; si no, el servicio
+     * volveria a pedirle el estado al lector una vez por rueda y por consulta.
+     */
+    @Volatile
+    var detectorPinchazo: ((String, Float?) -> String)? = null
+
+    /**
+     * Los dos numeros con los que corre el detector, ya escritos.
+     *
+     * Escalar y no gancho: son constantes de compilacion, no cambian en
+     * caliente, y una indireccion para leer algo fijo no paga. Se publica
+     * porque un umbral que solo vive en el codigo no se consulta desde la
+     * carretera, y porque un documento que lo repita se queda viejo el dia
+     * que alguien toque la constante. Esto no.
+     */
+    @Volatile
+    var umbralPinchazo: String? = null
+
 
     /**
      * Fuerza el aviso de VTEC hasta este instante. SOLO para verlo.

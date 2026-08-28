@@ -13,8 +13,8 @@ android {
         // el tablero acaba en otro head unit mas viejo.
         minSdk = 21
         targetSdk = 34
-        versionCode = 102
-        versionName = "9.8"
+        versionCode = 104
+        versionName = "10.0"
     }
 
     buildTypes {

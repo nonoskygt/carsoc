@@ -1102,7 +1102,15 @@ class DashView @JvmOverloads constructor(
         val mezcla = totalAjuste()
         filaGrande(canvas, x0, x1, h * 0.74f, h, "MEZCLA",
             mezcla?.let { "%+d %%".format(it) } ?: "-- %",
-            colorMezcla(mezcla, state.isStale(state.trimCortoAtMs, ahora)))
+            // La edad que manda es la del sumando MAS VIEJO. Mirando solo la
+            // del corto, un largo de hace cinco segundos se pintaba con el
+            // mismo color vivo que un dato de ahora: el corto se pide en los
+            // turnos 21 y 42 y el largo en el 12 y el 48, asi que casi nunca
+            // son del mismo instante y los dos huecos del largo (~4,8 s y
+            // ~3,2 s) pasan de los 3 s de STALE_AFTER_MS. Sumar dos momentos
+            // distintos y pintarlos como una medida es inventar el numero.
+            colorMezcla(mezcla, state.isStale(
+                minOf(state.trimCortoAtMs, state.trimLargoAtMs), ahora)))
 
         // El voltaje del puerto OBD es el del sistema con el motor en marcha,
         // o sea lo que da el ALTERNADOR. Se llama por su nombre para que no se
@@ -1130,10 +1138,18 @@ class DashView @JvmOverloads constructor(
      * por separado abajo — pero no para mirar de reojo si el motor va bien.
      */
     private fun totalAjuste(): Int? {
-        val c = state.trimCortoPct
-        val l = state.trimLargoPct
-        if (c == null && l == null) return null
-        return (c ?: 0) + (l ?: 0)
+        // Los DOS o ninguno. Rellenar con un cero el que falte no es
+        // conservador: convierte "no tengo esa mitad" en "esa mitad no esta
+        // corrigiendo nada", que es la respuesta contraria. Si el 0107 se cae
+        // de la rotacion —PollScheduler saca un PID tras tres fallos
+        // seguidos— un motor con el corto en +3% y el largo en +22% se
+        // pintaba "+3 %" en VERDE, o sea mezcla perfecta, con la centralita
+        // al limite de lo que puede corregir. Y desde que el AJUSTE dejo de
+        // pintarse aparte, esta fila es el unico sitio donde el dueño ve los
+        // ajustes: si falta la mitad del numero, no hay donde notarlo.
+        val c = state.trimCortoPct ?: return null
+        val l = state.trimLargoPct ?: return null
+        return c + l
     }
 
     /**
