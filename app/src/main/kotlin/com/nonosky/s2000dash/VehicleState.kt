@@ -41,9 +41,10 @@ data class VehicleState(
     val loadAtMs: Long = 0,
     val batteryV: Float? = null,
     val batteryAtMs: Long = 0,
-    /** Relacion de equivalencia de la sonda ancha. 1.0 = estequiometrica. */
-    val lambda: Float? = null,
-    val lambdaAtMs: Long = 0,
+    // Aqui vivian `lambda` y `lambdaAtMs`, de la sonda de banda ancha. Ni
+    // un escritor ni un lector en todo el proyecto: son el rastro de haber
+    // dado por hecho que este carro llevaba esa sonda. La MEZCLA que se
+    // pinta hoy sale de los ajustes de combustible, que si son reales.
     /** Presion absoluta del colector, kPa. En atmosferico, el vacuometro. */
     val mapKpa: Int? = null,
     val mapAtMs: Long = 0,

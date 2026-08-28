@@ -64,10 +64,11 @@ object PidDecoder {
      */
     const val PID_O2_V = "0114"
 
-    const val PID_O2_ANCHA = "0134"
-
-    /** Sonda de banda estrecha. Solo como respaldo: no da un AFR real. */
-    const val PID_O2_ESTRECHA = "0114"
+    // Aqui vivian PID_O2_ANCHA ("0134") y PID_O2_ESTRECHA, que era un
+    // duplicado exacto de PID_O2_V. Se van con decodeLambda: preguntarle a
+    // esta ECU por el 0134 devolvia vacio SIEMPRE, y la consulta del 0100
+    // que se le hizo al carro lo explico — su mapa de PIDs se corta en el
+    // 0x20, asi que ese sensor no existe aqui y nunca existio.
 
     /**
      * Tokens que en `ATRV` significan que no hubo lectura.
@@ -163,32 +164,6 @@ object PidDecoder {
         if (d.isEmpty()) return null
         return d.u(0) - 40
     }
-
-    /** Carga calculada = A * 100 / 255 (%). */
-
-    /**
-     * Lambda (relacion de equivalencia) de la sonda de banda ancha.
-     *
-     * Bytes A y B, escala 2/65536. Lambda 1.0 es la mezcla estequiometrica.
-     *
-     * Se devuelve lambda y no directamente el AFR porque lambda es lo que
-     * mide el sensor; el AFR depende del combustible, y multiplicar por 14.7
-     * es una conversion para gasolina que conviene tener a la vista y no
-     * escondida dentro del decodificador.
-     */
-    fun decodeLambda(raw: String?): Float? {
-        val p = payloadOf(raw, PID_O2_ANCHA) ?: return null
-        if (p.size < 2) return null
-        val bruto = ((p[0].toInt() and 0xFF) shl 8) or (p[1].toInt() and 0xFF)
-        val lambda = bruto * 2f / 65536f
-        // Fuera de este rango el sensor no esta midiendo: arranque en frio,
-        // corte en deceleracion, o sonda sin calentar. Devolver un numero
-        // ahi seria pintar una mezcla que nadie esta quemando.
-        return lambda.takeIf { it in 0.5f..1.6f }
-    }
-
-    /** AFR para gasolina. La estequiometrica son 14.7:1. */
-    fun afrDesdeLambda(lambda: Float?): Float? = lambda?.let { it * 14.7f }
 
 
     /**
