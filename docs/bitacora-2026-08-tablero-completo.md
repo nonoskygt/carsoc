@@ -369,6 +369,107 @@ Los otros 23 hilos son `mali-*` (GPU), `RenderThread` y runtime.
 
 ---
 
+## 28 de agosto: el día que la ECU habló de verdad
+
+Hasta esta sesión, el módulo de diagnóstico **nunca había leído un código con
+el motor girando**. Sólo estaba probado el camino del fallo: con el carro
+apagado salía el error rojo, que ya era mucho más que el «SIN AVERIAS» verde
+mentiroso de antes. Pero el camino bueno no se había ejercitado jamás.
+
+Con el motor a 906 rpm y el agua a 91 °C, y capturando el tráfico SPP crudo
+del propio radio (`logcat` vuelca los `send:` del stack Bluetooth), quedó
+demostrado que los tres arreglos de la sesión anterior salen **de verdad por
+el cable**:
+
+| bytes en el log | ASCII | qué es |
+|---|---|---|
+| `41 54 41 54 30 0D` | `ATAT0\r` | temporización fija |
+| `41 54 53 54 20 46 46 0D` | `ATST FF\r` | su otra mitad |
+| `41 54 53 50 35 0D` | `ATSP5\r` | ISO 9141-2 |
+| `30 33 0D` `30 37 0D` `30 41 0D` | `03` `07` `0A` | los tres modos |
+
+El stack **no registra lo que entra**, sólo lo que sale, así que la respuesta
+tuvo que sacarse por la ruta nueva `/dtc`:
+
+```
+0101 -> 410100076D25       la ECU contesta: luz apagada, 0 códigos
+03 (guardados)   -> NO DATA
+07 (pendientes)  -> NO DATA
+0A (permanentes) -> NO DATA
+```
+
+**`NO DATA` es una respuesta, no un silencio.** El carro está sano de verdad,
+y por primera vez está demostrado en lugar de supuesto — que es exactamente la
+distinción que el arreglo de `huboRespuesta()` existía para defender.
+
+### La colisión de enlaces: estaba en `main` sin que nadie la hubiera escrito
+
+`LectorDtc` abre su **propia** conexión SPP —no le queda otra: el modo 03 exige
+fijarle la temporización al adaptador, y hacérselo al sondeo en marcha le
+estropearía el ritmo a mitad de una lectura— y el Steren atiende **un solo
+enlace RFCOMM**.
+
+`DiagnosticoActivity` llama al lector **a pelo**, sin parar el sondeo. `/pids` y
+`/obd-spp` tenían el mismo agujero. Con el sondeo corriendo son dos sockets
+contra el mismo clon: o el segundo muere, o —peor— el clon acepta los dos, una
+respuesta de RPM cae dentro del buffer del modo 03 y se decodifica como averías
+que el carro no tiene.
+
+Medido: con el sondeo vivo, `/pids` contestaba
+
+```
+RFCOMM fallo por todas las vias: inseguro-SPP=read failed... seguro-canal1=read failed
+```
+
+La ruta `/dtc` sí apaga el sondeo antes, y `/pids` pasó a preguntar **por el
+enlace que ya está abierto** en vez de abrir uno propio.
+
+### Seis segundos, medidos, no de manual
+
+La primera versión de `/dtc` esperaba 2 s a que el adaptador soltara el canal.
+Contra el carro real no bastaba: `SppTransport` se lanzaba a sus cuatro vías
+contra un adaptador todavía ocupado y **la petición tardó cuatro minutos** en
+vez de medio. El socket del puente muere a los 120 s, así que quien preguntaba
+se quedaba sin respuesta de una lectura que sí estaba ocurriendo — y peor, el
+sondeo se quedó sin volver: el tablero en marcha y ciego.
+
+Ahora son 6 s, y las reanudaciones van en `runCatching` para que un fallo al
+volver no arrastre a las otras dos.
+
+---
+
+## MEZCLA podía decir «+3 %» en verde con el motor al límite
+
+El hallazgo más grave de la sesión, y salió de barrer el proyecto entero
+buscando la trampa que ya nos había mordido tres veces.
+
+`totalAjuste()` sumaba los dos ajustes de combustible **rellenando con cero el
+que faltara**. Pero un cero en un ajuste no significa «no lo sé»: significa
+«está corrigiendo perfecto», que es la respuesta contraria.
+
+`PollScheduler` saca un PID de la rotación tras tres fallos seguidos y no lo
+vuelve a pedir en esa conexión. Si le toca al `0107`, el ajuste largo se queda
+en `null` para siempre y MEZCLA pasa a ser el corto solo. **Un motor con el
+corto en +3 % y el largo en +22 %** —fuga de vacío, la centralita al límite de
+lo que puede corregir— **se pintaba «+3 %» en VERDE**.
+
+Y desde que la fila AJUSTE dejó de pintarse aparte, ésta es la única fila donde
+el dueño ve los ajustes: no queda ningún sitio donde notar que falta la mitad
+del número.
+
+Segundo defecto en la misma fila: el color miraba **una sola edad**, la del
+corto. `trimLargoAtMs` existía, se escribía en cada lectura, y **no lo leía
+nadie en todo el proyecto**. Los dos sumandos casi nunca son del mismo
+instante —el corto se pide en los turnos 21 y 42, el largo en el 12 y el 48— y
+los dos huecos del largo (~4,8 s y ~3,2 s) pasan de los 3 s de
+`STALE_AFTER_MS`. La mitad larga se pintaba con color vivo estando rancia.
+
+Ahora: los dos ajustes o ninguno, y manda la edad del sumando más viejo. MEZCLA
+se pone gris más a menudo que antes; eso no es una regresión, es que antes se
+pintaba viva cuando no le tocaba.
+
+---
+
 ## Rutas nuevas del puente (`:8099`)
 
 | Ruta | Qué hace |
@@ -376,7 +477,9 @@ Los otros 23 hilos son `mali-*` (GPU), `RenderThread` y runtime.
 | `/pids` | le pregunta a la ECU qué PIDs soporta y los nombra |
 | `/aceite` | estado; `?odometro=` reancla, `?cambiado=1` reinicia, `?proximo=` `?intervalo=` `?horas=` |
 | `/vtec?segundos=` | fuerza el aviso de VTEC para verlo sin redlinear |
-| `/probar-alerta` | lanza una alerta de llanta de prueba |
+| `/probar-alerta` | lanza una alerta de llanta de prueba, **y dice si Android la dejará sonar** |
+| `/dtc` | lee los códigos de avería con la traza cruda; `?borrar=1` los borra |
+| `/vtec?forzar=0` | pregunta sin encender el aviso: rpm máximas **con carga**, veces que enganchó |
 | `/obd-spp?mac=` | diálogo AT por la radio interna |
 | `/soltar-bt` | suelta la radio Bluetooth sin tocar la pantalla |
 
@@ -397,3 +500,31 @@ Los otros 23 hilos son `mali-*` (GPU), `RenderThread` y runtime.
 - `gradlew` wrapper nunca commiteado. Gradle en `~/tools/gradle-8.7`.
 - Queda sin probar la hipótesis del MTU sobre el BLE interno (ver la otra
   bitácora): hace falta el dongle fuera y el BMS descansado.
+- **`AIRE` 130 °C confirmado una segunda vez** (28-ago, al ralentí parado con
+  el vano caliente). Sigue siendo plausible por remojo de calor. **La prueba
+  pendiente es la misma: si andando no baja de 100, el sensor está mal.**
+- **Tres cosas siguen sin verificarse conduciendo**, pero ya se pueden
+  *observar*, que era el problema real:
+  - El odómetro por GPS nunca se ha contrastado contra el real en un viaje.
+    Primera lectura de los contadores nuevos: `fijas=1`, `±15 m`. El receptor
+    está vivo y dentro del guarda de 40 m — eso antes era indistinguible de una
+    antena muerta.
+  - El fondo rojo del VTEC no se ha visto nunca. `/vtec?forzar=0` dice ahora
+    cuántas rpm se alcanzaron **con carga suficiente**, o sea cuánto faltó.
+  - La alarma de pinchazo no la ha oído nadie. `/probar-alerta` usa la ruta
+    real (verificado: misma función, mismos argumentos, mismo canal) y ahora
+    avisa si Android tiene el canal silenciado, que es la forma de fallar que
+    no lanza excepción.
+- **`ventanas comparadas` es del proceso, no del viaje.** Si Android relanza el
+  servicio a mitad de camino vuelve a cero y parece que midió menos. La edad de
+  la referencia y `reaperturas`, que salen al lado, dan el contexto.
+- **`LectorBmsGatt.utilizable()` no la llama nadie.** Está documentada como la
+  puerta que impide pintar un voltaje de litio equivocado, y `publicarLectura`
+  publica sin consultarla. No se tocó porque no se pudo demostrar que muerda
+  hoy, y cablear `creible()` entero sería peor el remedio (`largoInesperado`
+  dejaría la columna en blanco con un módulo de campos de más). Lo mínimo
+  seguro sería `c?.takeIf { it.creible() }?.sumaV`.
+- **`LectorDtc` da `luzEncendida = false` si el `0101` se pierde**, en vez de
+  «no lo sé». Es el único de los cuatro modos que no alimenta la lista de
+  `fallos`. Miente en la dirección tranquilizadora, pero con la luz encendida
+  los códigos existen y el modo 03 los trae, así que la contradicción se ve.

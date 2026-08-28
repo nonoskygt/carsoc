@@ -344,6 +344,14 @@ medida.**
 - **Probar la hipótesis del MTU** con el dongle fuera y el BMS descansado.
 - `RadioBt.Piezas` declara `HciUsb` concreto en vez de `CanalUsbHci` — bloquea el
   test de ciclo completo con USB falso.
+- **`DiagnosticoActivity` sigue sin parar el sondeo** antes de llamar al lector.
+  La ruta `/dtc` sí lo hace; la pantalla no. Hoy no muerde porque el dueño la
+  abre con el carro parado, pero es la misma colisión de enlaces que dejó a
+  `/pids` contestando «RFCOMM falló por todas las vías». Lo correcto sería que
+  la pantalla pasara por el mismo gancho que la ruta.
+- **`/obd-spp` conserva el agujero de la doble conexión.** Se dejó a propósito:
+  es una ruta de diagnóstico del enlace, y para eso a veces hace falta abrir uno
+  propio. Pero conviene saber que con el sondeo vivo va a fallar.
 
 ---
 
@@ -358,3 +366,5 @@ medida.**
 | `/ajustes?que=` | abre pantallas del sistema por intent (**con el tablero visible**) |
 | `/soltar-bt` | suelta la radio Bluetooth sin tocar la pantalla |
 | `/obd-spp?mac=` | diálogo AT por la radio interna |
+| `/dtc` | códigos de avería en remoto, con la traza cruda; `?borrar=1` borra |
+| `/at?cmd=` | **ahora también con la radio interna**, sobre la sesión del sondeo |
