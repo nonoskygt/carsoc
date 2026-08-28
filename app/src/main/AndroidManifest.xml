@@ -90,6 +90,20 @@
             </intent-filter>
         </activity>
 
+        <!--
+          La pantalla de averias. APARTE del tablero a proposito: carga 36 KB
+          de tabla de codigos y abre su propia conexion al OBD, y nada de eso
+          hace falta mientras se maneja. Se abre a mano, se usa, se cierra, y
+          al cerrarse suelta la tabla.
+        -->
+        <activity
+            android:name=".diag.DiagnosticoActivity"
+            android:exported="false"
+            android:label="Diagnostico"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.S2000Dash" />
+
         <!-- Sostiene el puente de diagnostico y la revision de
              actualizaciones aunque el tablero no este en pantalla. -->
         <service

@@ -379,6 +379,11 @@ class DebugServer(
                         .getOrNull() ?: listOf("ERROR: el servicio no registro la prueba SPP")
                     sendText(out, 200, "text/plain", lista.joinToString(SALTO))
                 }
+                "/probar-alerta" -> {
+                    val r = runCatching { EstadoActual.probarAlertaLlanta?.invoke() }
+                        .getOrNull() ?: "el servicio no registro la prueba"
+                    sendText(out, 200, "text/plain", r)
+                }
                 "/aceite" -> {
                     val m = com.nonosky.s2000dash.Mantenimiento
                     consulta["odometro"]?.toFloatOrNull()?.let { m.anclarOdometro(it) }

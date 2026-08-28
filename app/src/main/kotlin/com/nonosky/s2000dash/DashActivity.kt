@@ -154,6 +154,17 @@ class DashActivity : ComponentActivity() {
         // sondeo no volveria a conectar nunca. La radio se le devuelve a
         // Android Auto al CERRAR, que es cuando toca.
         dashView.alCerrar = { cerrarYSoltarRadio() }
+        dashView.alAbrirDiagnostico = {
+            runCatching {
+                startActivity(
+                    android.content.Intent(
+                        this, com.nonosky.s2000dash.diag.DiagnosticoActivity::class.java,
+                    )
+                )
+            }.onFailure {
+                android.util.Log.w("DashActivity", "no se abrio el diagnostico: ${it.message}")
+            }
+        }
         dashView.alConfirmarAceite = {
             Mantenimiento.aceiteCambiado()
             runCatching {

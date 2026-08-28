@@ -114,6 +114,14 @@ object EstadoActual {
     var soltarBluetooth: (() -> String)? = null
 
     /**
+     * Dispara una alerta de prueba de llanta.
+     *
+     * Existe porque la alternativa para saber si la alerta suena de verdad
+     * —y si se oye por encima de la musica— es esperar a tener un pinchazo.
+     */
+    var probarAlertaLlanta: (() -> String)? = null
+
+    /**
      * Fuerza el aviso de VTEC hasta este instante. SOLO para verlo.
      *
      * Existe porque comprobar el efecto de verdad exige subir a 5850 rpm con

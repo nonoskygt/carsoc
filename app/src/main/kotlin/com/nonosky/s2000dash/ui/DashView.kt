@@ -45,6 +45,12 @@ class DashView @JvmOverloads constructor(
 
     // --- Estado -------------------------------------------------------------
 
+    /** Abrir la pantalla de averias. Lo pone la Activity. */
+    var alAbrirDiagnostico: (() -> Unit)? = null
+
+    /** Donde quedo el acceso al diagnostico. */
+    private val cajaDiagnostico = RectF()
+
     /**
      * Que hacer cuando se pulsa la X. Lo pone la Activity.
      *
@@ -174,7 +180,38 @@ class DashView @JvmOverloads constructor(
         // En su hueco de abajo a la izquierda va el VTEC.
         dibujarVtec(canvas, w, h, vtec)
         dibujarCerrar(canvas, w, h)
+        dibujarAccesoDiagnostico(canvas, w, h)
         dibujarConfirmacionAceite(canvas, w, h)
+    }
+
+    /**
+     * El acceso a la pantalla de averias, arriba a la izquierda.
+     *
+     * Discreto y en la esquina OPUESTA a la X de cerrar: son las dos unicas
+     * cosas de este tablero que sacan al dueño de donde esta, y ponerlas
+     * juntas seria pedir que confunda una con otra manejando.
+     *
+     * Se enciende en ambar cuando hay codigos guardados, que es la unica vez
+     * que este boton importa de verdad.
+     */
+    private fun dibujarAccesoDiagnostico(canvas: Canvas, w: Float, h: Float) {
+        val lado = h * 0.13f
+        val margen = h * 0.03f
+        cajaDiagnostico.set(margen, margen, margen + lado, margen + lado)
+
+        val hayCodigos = state.milEncendida || state.codigosGuardados > 0
+        val color = if (hayCodigos) COLOR_AMBER else COLOR_SILUETA
+
+        trazoPaint.color = color
+        trazoPaint.strokeWidth = h * 0.008f
+        canvas.drawRoundRect(cajaDiagnostico, lado * 0.25f, lado * 0.25f, trazoPaint)
+
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.color = if (hayCodigos) COLOR_AMBER else COLOR_TEXT_DIM
+        textPaint.textSize = lado * 0.55f
+        canvas.drawText(
+            "!", cajaDiagnostico.centerX(), cajaDiagnostico.centerY() + lado * 0.20f, textPaint,
+        )
     }
 
     /**
@@ -295,6 +332,12 @@ class DashView @JvmOverloads constructor(
                 // las dos cosas y las separa el TIEMPO, no la posicion, asi
                 // que no hay que buscar un segundo boton en una pantalla que
                 // ya no tiene sitio.
+                if (cajaDiagnostico.contains(event.x, event.y)) {
+                    runCatching { alAbrirDiagnostico?.invoke() }
+                    performClick()
+                    return true
+                }
+
                 if (cajaAceite.contains(event.x, event.y)) {
                     sosteniendoAceite = true
                     aceiteDesdeMs = System.currentTimeMillis()

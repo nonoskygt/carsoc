@@ -145,6 +145,15 @@ class DashService : Service() {
         EstadoActual.abrirAjustes = { que, paquete -> Ajustes.abrir(ctx, que, paquete) }
         EstadoActual.interruptores = { Ajustes.interruptores(ctx) }
         EstadoActual.soltarBluetooth = { soltarBluetooth() }
+        EstadoActual.probarAlertaLlanta = {
+            val lect = lectorTpms?.estado()?.ruedas?.values?.firstOrNull()
+            if (lect == null) {
+                "no hay ninguna rueda leyendo todavia"
+            } else {
+                avisarPresionBaja(lect, pinchazo = true, caida = 4.5f)
+                "alerta de PRUEBA lanzada sobre ${lect.rueda.corta} — deberia sonar"
+            }
+        }
 
         // El diagnostico del BMS se registra SIEMPRE, no solo con la bateria
         // encendida. Hacia falta apagar el vigilante para poder mirar por que
