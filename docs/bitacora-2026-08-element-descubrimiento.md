@@ -51,6 +51,27 @@ adb shell 'am start -n com.android.settings/com.android.settings.Settings\$Devel
 ⚠️ **Trampa de Git Bash:** convierte `/data/local/tmp/x.png` en
 `C:/Program Files/Git/data/local/tmp/x.png`. Para rutas de Android, usar PowerShell.
 
+### ⚠️ EL RADIO SE CAE DEL WI-FI EN CADA REINICIO, Y NO VUELVE SOLO
+
+Dato del dueño, y **corrige una afirmación equivocada mía**: al ver que el ADB respondía
+tras un reinicio se dio por hecho que el Wi-Fi se había reconectado solo. **Falso — lo
+había reactivado el dueño a mano.** Se infirió y se presentó como medido, que es justo lo
+que la regla del proyecto prohíbe.
+
+**Consecuencia real:** después de cada arranque del carro el radio queda **incomunicado**
+hasta que alguien toca la pantalla. Eso deja inservibles la auto-actualización, el puente
+HTTP y el ADB — o sea, todo el control remoto — precisamente cuando más falta hace, que es
+al volver de un viaje.
+
+**Y aquí este radio tiene una ventaja que el del S2000 no tenía:** corre **API 28**, y
+`WifiManager.setWifiEnabled(true)` **todavía funciona** en API 28. Google lo desactivó para
+apps normales a partir de API 29. Así que el tablero del Element **puede encender el Wi-Fi
+él mismo al arrancar**, sin root y sin que nadie toque nada.
+
+Queda por verificar en este aparato concreto (algunas ROM chinas lo capan), y hay que
+decidir si reconecta siempre o solo cuando reconoce la red de casa — un carro que enciende
+la radio en cada arranque en medio del campo gasta batería para nada.
+
 ---
 
 ## EL HALLAZGO QUE MÁS CÓDIGO BORRA: aquí el BLE funciona
