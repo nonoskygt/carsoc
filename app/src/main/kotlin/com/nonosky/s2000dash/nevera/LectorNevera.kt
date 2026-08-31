@@ -46,6 +46,45 @@ class LectorNevera(private val context: Context) {
     var alCambiar: (() -> Unit)? = null
 
     private val traza = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    /**
+     * Comandos pendientes de mandar en la proxima conexion.
+     *
+     * No se abre un enlace por cada toque: la nevera atiende UN cliente y
+     * abrir y cerrar por cada boton la deja inservible para el movil. Se
+     * encolan y viajan con la siguiente consulta, que ademas trae de vuelta
+     * el estado ya cambiado — asi el boton se confirma con la lectura real
+     * de la nevera y no con lo que el tablero creia haber mandado.
+     */
+    private val pendientes = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+
+    /** Un toque adelanta el siguiente ciclo: 30 s de espera se notarian. */
+    @Volatile private var correPrisa = false
+
+    /** Apaga o enciende. Devuelve false si aun no sabemos como esta. */
+    fun encender(on: Boolean): Boolean = mandar { Alpicool.ajustes(it, encendida = on) }
+
+    /** Max (false) o Eco (true). */
+    fun modoEco(eco: Boolean): Boolean = mandar { Alpicool.ajustes(it, modoEco = eco) }
+
+    /**
+     * Mueve la consigna. El rango lo dicta la NEVERA, no una constante: si
+     * pide -20..20, ahi se queda. Escribir fuera de rango lo rechaza ella.
+     */
+    fun moverConsigna(delta: Int): Boolean = mandar { e ->
+        val nueva = (e.consigna + delta).coerceIn(e.minima, e.maxima)
+        if (nueva == e.consigna) null else Alpicool.fijarConsigna(nueva)
+    }
+
+    private fun mandar(construir: (Alpicool.Estado) -> ByteArray?): Boolean {
+        val e = estado ?: return false
+        val t = construir(e) ?: return false
+        pendientes.offer(t)
+        correPrisa = true
+        hilo?.interrupt()   // corta la siesta: que salga ya
+        anotar("encolado: " + t.joinToString(" ") { "%02x".format(it) })
+        return true
+    }
     @Volatile private var vivo = false
     private var hilo: Thread? = null
 
@@ -58,10 +97,22 @@ class LectorNevera(private val context: Context) {
         hilo = thread(name = "nevera", isDaemon = true) {
             while (vivo) {
                 if (com.nonosky.s2000dash.Termometro.permiteBateria()) {
-                    runCatching { unaLectura() }
-                        .onFailure { anotar("fallo: ${it.javaClass.simpleName} ${it.message}") }
+                    // Mismo turno que los bancos: uno a la vez en toda la
+                    // radio. Sin esto, los tres lectores se pisan y el que
+                    // pierde deja de leer sin que nadie se entere.
+                    val hubo = com.nonosky.s2000dash.bateria.TurnoBle
+                        .conLaRadio("nevera") {
+                            runCatching { unaLectura() }
+                                .onFailure {
+                                    anotar("fallo: ${it.javaClass.simpleName} ${it.message}")
+                                }
+                            true
+                        }
+                    if (hubo == null) anotar("sin turno de radio")
                 }
-                dormir(PERIODO_MS)
+                val espera = if (correPrisa) 1_000L else PERIODO_MS
+                correPrisa = false
+                dormir(espera)
             }
         }
     }
@@ -180,6 +231,16 @@ class LectorNevera(private val context: Context) {
                     BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0)
                     BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
                 else BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            // Primero lo que el dueño pidio, y despues la consulta: la
+            // respuesta traera el estado YA cambiado, asi que el boton se
+            // confirma contra la nevera y no contra lo que creimos mandar.
+            while (true) {
+                val cmd = pendientes.poll() ?: break
+                escribir.value = cmd
+                gatt.writeCharacteristic(escribir)
+                anotar("mandado: " + cmd.joinToString(" ") { "%02x".format(it) })
+                runCatching { Thread.sleep(220) }
+            }
             escribir.value = Alpicool.consulta()
             gatt.writeCharacteristic(escribir)
 

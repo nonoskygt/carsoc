@@ -86,6 +86,36 @@ object Alpicool {
         trama(CMD_CONSIGNA_IZQ, byteArrayOf(valor.toByte()))
 
     /**
+     * Comando de ajustes (0x02), a partir del estado actual.
+     *
+     * ⚠️ LEER-MODIFICAR-ESCRIBIR. Se reenvian los 14 parametros del estado
+     * cambiando solo el pedido; mandar el comando con ceros apagaria la
+     * nevera, le pondria la consigna a 0 y le borraria el corte por bajo
+     * voltaje de una sola vez.
+     *
+     * Los 14 bytes son: bloqueo, encendida, modo, corte de bateria, consigna,
+     * maxima, minima, histeresis, retardo, unidad y cuatro correcciones. Los
+     * sensores NO van: no se escriben.
+     *
+     * La trama sale de 20 bytes justos, que es lo que cabe en un ATT de MTU
+     * 23 — no hay que partirla.
+     */
+    fun ajustes(
+        estado: Estado,
+        encendida: Boolean? = null,
+        modoEco: Boolean? = null,
+        consigna: Int? = null,
+    ): ByteArray? {
+        val p = estado.crudo
+        if (p.size < 14) return null
+        val datos = p.copyOfRange(0, 14)
+        encendida?.let { datos[0x01] = (if (it) 1 else 0).toByte() }
+        modoEco?.let { datos[0x02] = (if (it) 1 else 0).toByte() }
+        consigna?.let { datos[0x04] = it.toByte() }
+        return trama(CMD_AJUSTES, datos)
+    }
+
+    /**
      * Separa las tramas de un flujo de notificaciones.
      *
      * ⚠️ NO se puede interpretar notificacion a notificacion. Con el MTU por
@@ -139,6 +169,17 @@ object Alpicool {
         val histeresis: Int,
         val unidadCelsius: Boolean,
         val voltaje: Float?,
+        /** 0 = Max, 1 = Eco. */
+        val modoEco: Boolean,
+        /**
+         * El payload tal cual vino.
+         *
+         * Hace falta porque el comando de ajustes (0x02) es
+         * LEER-MODIFICAR-ESCRIBIR: hay que reenviar TODOS los parametros
+         * cambiando solo el que se toca. Sin el original, encender la nevera
+         * le pisaria la consigna, el modo y el corte por bajo voltaje.
+         */
+        val crudo: ByteArray = ByteArray(0),
     ) {
         /**
          * El compresor, DEDUCIDO. Arranca cuando la temperatura sube por
@@ -200,6 +241,8 @@ object Alpicool {
             histeresis = p[0x07].toInt() and 0xFF,
             unidadCelsius = (p[0x09].toInt() and 0xFF) == 0,
             voltaje = volt,
+            modoEco = (p[0x02].toInt() and 0xFF) != 0,
+            crudo = p,
         )
     }
 }

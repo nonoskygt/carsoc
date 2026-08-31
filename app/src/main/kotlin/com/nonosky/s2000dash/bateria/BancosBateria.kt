@@ -90,7 +90,15 @@ class BancosBateria(private val context: Context) {
                 }
                 for (b in todos) {
                     if (!vivo) break
-                    leer(b)
+                    // Un reintento. El banco de vivienda esta mas lejos
+                    // (RSSI -72 contra -66) y falla la conexion una de cada
+                    // dos: sin reintentar, caducaba antes de la siguiente
+                    // lectura buena y la tarjeta parpadeaba a "--" teniendo
+                    // la bateria a metro y medio.
+                    if (!leer(b) && vivo) {
+                        dormir(REINTENTO_MS)
+                        leer(b)
+                    }
                     // Respiro entre bancos: le da tiempo al controlador a
                     // cerrar el enlace anterior antes de abrir el siguiente.
                     dormir(PAUSA_ENTRE_BANCOS_MS)
@@ -114,20 +122,32 @@ class BancosBateria(private val context: Context) {
         (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
     }.getOrNull()
 
-    private fun leer(b: Banco) {
+    /** Devuelve true si la lectura llego a publicar datos. */
+    private fun leer(b: Banco): Boolean {
+        var ok = false
         runCatching {
-            val lectura = LectorBmsAndroid.leer(
-                context = context,
-                adaptador = adaptador(),
-                mac = b.mac,
-                pedirCeldas = true,
-            )
+            // Turno unico para toda la radio BLE: con tres lectores sueltos,
+            // el de vivienda dejo de leer del todo mientras el de arranque
+            // seguia contestando. Ver TurnoBle.
+            val lectura = TurnoBle.conLaRadio("banco-${b.clave}") {
+                LectorBmsAndroid.leer(
+                    context = context,
+                    adaptador = adaptador(),
+                    mac = b.mac,
+                    pedirCeldas = true,
+                )
+            } ?: run {
+                b.detalle = "sin turno de radio"
+                Log.w(TAG, "banco ${b.clave}: sin turno")
+                return@runCatching
+            }
             val basico = lectura.basico
             if (basico == null) {
                 // NO se borra lo anterior: se deja envejecer y que `vivo()`
                 // decida. Borrar al primer fallo hace parpadear la tarjeta
                 // cada vez que una lectura se pierde, que en BLE es normal.
                 b.detalle = lectura.problemas.firstOrNull() ?: "sin datos del BMS"
+                Log.w(TAG, "banco ${b.clave} sin basico: ${b.detalle}")
                 return@runCatching
             }
             b.soc = basico.soc
@@ -137,11 +157,14 @@ class BancosBateria(private val context: Context) {
             b.celdas = basico.numeroCeldas
             b.leidoMs = System.currentTimeMillis()
             b.detalle = null
+            Log.i(TAG, "banco ${b.clave}: soc=${b.soc} v=${b.voltaje} a=${b.corrienteA}")
+            ok = true
             runCatching { alCambiar?.invoke() }
         }.onFailure {
             b.detalle = "fallo leyendo: ${it.javaClass.simpleName}"
             Log.w(TAG, "banco ${b.clave} fallo: ${it.message}")
         }
+        return ok
     }
 
     /** Para el puente HTTP: que esta viendo cada banco. */
@@ -169,6 +192,7 @@ class BancosBateria(private val context: Context) {
         /** Cada cuanto se da una vuelta completa a los dos bancos. */
         const val PERIODO_MS = 8_000L
         const val PAUSA_ENTRE_BANCOS_MS = 1_200L
+        const val REINTENTO_MS = 1_500L
 
         /** Igual que en BateriaState: pasado un minuto, deja de ser dato. */
         const val SIN_VERSE_MS = 60_000L

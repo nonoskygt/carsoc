@@ -56,7 +56,7 @@ body{
 }
 
 /* ---------- capa de fondo: curvas de nivel ---------- */
-#relieve{position:fixed;top:0;left:0;width:1024px;height:600px;z-index:0;pointer-events:none;opacity:.45}
+#relieve{position:fixed;top:0;left:0;width:1024px;height:600px;z-index:0;pointer-events:none;opacity:1}
 
 /* ---------- rejilla maestra ---------- */
 /* Velo sobre el fondo del radio.
@@ -65,7 +65,7 @@ body{
    fondo se reconoce entre las tarjetas y el texto sigue por encima de
    4.5:1. Subir a 0.8 lo hace mas legible; bajar a 0.4, mas bonito y peor. */
 .frame{position:relative;z-index:1;width:1024px;height:600px;padding:12px;
-       overflow:hidden;background:rgba(19,23,21,.62)}
+       overflow:hidden;background:rgba(19,23,21,.90)}
 
 .row{display:grid;grid-template-columns:396px 264px 320px;grid-gap:10px;gap:10px}
 .row1{height:296px;margin-top:10px}
@@ -73,7 +73,7 @@ body{
 .row2{height:216px;margin-top:10px;grid-template-columns:500px 220px 260px}
 
 .card{
-  height:100%;background:rgba(26,32,28,.78);
+  height:100%;background:rgba(26,32,28,.94);
   border:1px solid var(--line);border-radius:3px;
   padding:12px 14px;position:relative;overflow:hidden;
   box-shadow:inset 0 1px 0 rgba(237,228,211,.045);
@@ -97,11 +97,19 @@ body{
 .rl .ld{flex:1 1 auto;min-width:6px;height:0;border-top:1px dotted var(--dot);margin:0 8px}
 .rl .mt{font-family:var(--mono);font-size:8px;letter-spacing:.04em;color:var(--mute);white-space:nowrap}
 
+/* La potencia dice de un vistazo si el banco gana o pierde energia.
+   Verde entrando, rojo saliendo. Es el unico sitio del tablero donde el
+   color codifica un signo, y por eso el signo TAMBIEN se escribe: quien
+   no distinga los dos tonos sigue leyendo "+" o "-". */
+.carga{color:#9CBE7A !important}
+.descarga{color:#ED7A45 !important}
 .i-ocher{color:var(--ocher)} .i-moss{color:var(--moss)}
 .i-lake{color:var(--lake)}   .i-sand{color:var(--sand)}
 
 /* ---------- tipografia de dato ---------- */
-.big{font-size:76px;line-height:.78;font-weight:700;letter-spacing:-.025em;color:var(--bone);white-space:nowrap}
+/* flex:0 0 auto o las tres columnas de al lado lo estrujan y el simbolo
+   se va a la linea de abajo. Paso de verdad al agrandar los numeros. */
+.big{font-size:76px;line-height:.78;font-weight:700;letter-spacing:-.025em;color:var(--bone);white-space:nowrap;flex:0 0 auto}
 .big i{font-size:23px;font-style:normal;font-weight:500;letter-spacing:0;color:var(--sand);margin-left:3px}
 .mid{font-size:54px;line-height:.82;font-weight:700;letter-spacing:-.02em;color:var(--bone);white-space:nowrap}
 .mid i{font-size:18px;font-style:normal;font-weight:500;letter-spacing:0;color:var(--sand);margin-left:2px}
@@ -110,7 +118,7 @@ body{
 /* ============================ CABECERA ============================ */
 .top{
   height:44px;display:flex;align-items:center;padding:0 12px;
-  background:rgba(26,32,28,.58);border:1px solid var(--line);border-radius:3px;
+  background:rgba(26,32,28,.88);border:1px solid var(--line);border-radius:3px;
 }
 .brand{display:flex;align-items:center}
 .brand .mark{width:26px;height:26px;margin-right:9px;color:var(--ocher)}
@@ -142,11 +150,13 @@ body{
 .stat .num{color:var(--bone);font-weight:700}
 
 /* ============================ VIVIENDA ============================ */
-.hero{display:flex;align-items:center;height:88px}
+.hero{display:flex;align-items:center;height:112px}
 .mg3{grid-template-columns:1fr 1fr 1fr !important}
 .mg{display:grid;grid-template-columns:1fr 1fr;grid-gap:7px 10px;gap:7px 10px;flex:1 1 auto;margin-left:14px}
-.mg .v{font-size:21px;font-weight:600;line-height:1.06;color:var(--bone);margin-top:3px;white-space:nowrap}
-.mg .v i{font-size:11px;font-style:normal;font-weight:500;color:var(--sand);margin-left:3px}
+/* Los tres numeros ocupan el hueco que dejo el cuadro de deducido. */
+.mg .v{font-size:36px;font-weight:700;line-height:1;color:var(--bone);
+       margin-top:5px;white-space:nowrap;letter-spacing:-.02em}
+.mg .v i{font-size:13px;font-style:normal;font-weight:600;color:var(--sand);margin-left:3px}
 
 /* barra de nivel con marcas cada 10% */
 .meter{position:relative;height:16px;background:var(--ink3);
@@ -157,11 +167,11 @@ body{
 .meter .tk{position:absolute;top:0;left:0;right:0;bottom:0;
   background-image:repeating-linear-gradient(90deg,rgba(19,23,21,.55) 0 1px,transparent 1px 10%)}
 
-.band{height:52px;margin-top:12px;display:flex;align-items:center;justify-content:space-between;
+.band{height:64px;margin-top:12px;display:flex;align-items:center;justify-content:space-between;
       padding:0 12px;background:rgba(0,0,0,.24);border:1px solid var(--line);
       border-left:2px solid var(--moss);border-radius:2px}
 .band .k2{font-size:8px;letter-spacing:.13em;color:var(--mute);margin-top:4px;text-transform:uppercase}
-.band .bv{font-size:33px;font-weight:700;line-height:1;color:var(--bone);white-space:nowrap}
+.band .bv{font-size:40px;font-weight:700;line-height:1;color:var(--bone);white-space:nowrap}
 .band .bv i{font-size:14px;font-style:normal;font-weight:500;color:var(--sand);margin-left:3px}
 
 /* ---------- lenguaje de "deducido" ---------- */
@@ -196,10 +206,24 @@ body{
 .tbar .lb{position:absolute;top:22px;left:0;right:0;display:flex;justify-content:space-between;
   font-size:7.5px;letter-spacing:.1em;color:var(--mute)}
 
-.rowline{height:46px;margin-top:10px;display:flex;align-items:center;justify-content:space-between;
+.rowline{height:44px;margin-top:10px;display:flex;align-items:center;justify-content:space-between;
   padding:0 11px;background:rgba(0,0,0,.2);border:1px solid var(--line);border-radius:2px}
 .rowline .v{font-size:21px;font-weight:600;color:var(--bone);white-space:nowrap;margin-top:4px;line-height:1}
 .rowline .v i{font-size:10px;font-style:normal;font-weight:500;color:var(--sand);margin-left:3px}
+
+/* ---------- mandos de la nevera ----------
+   44x44 de verdad: es lo minimo que se acierta con el dedo en un carro que
+   se mueve, y el unico sitio del tablero donde se TOCA algo. */
+.mandos{display:flex;gap:7px;margin-top:9px;height:46px}
+.btn{flex:1 1 auto;min-width:46px;height:46px;display:flex;align-items:center;
+     justify-content:center;background:rgba(0,0,0,.28);border:1px solid var(--line2);
+     border-radius:3px;font-size:12.5px;font-weight:700;letter-spacing:.06em;
+     color:var(--sand);text-transform:uppercase;padding:0 4px;white-space:nowrap;
+     -webkit-user-select:none;user-select:none}
+.btn:active{background:rgba(156,190,122,.22);border-color:var(--moss);color:var(--bone)}
+.btn.grande{font-size:26px;letter-spacing:0;flex:0 0 62px}
+.btn.on{border-color:var(--moss);color:var(--moss)}
+.btn.off{border-color:var(--line2);color:var(--mute)}
 
 /* ============================ LLANTAS ============================ */
 .chip-al{display:flex;align-items:center;font-size:8px;font-weight:700;letter-spacing:.16em;
@@ -208,15 +232,28 @@ body{
 
 .tg{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:116px 116px;
     grid-gap:8px;gap:8px;height:240px}
+/* Dos columnas: los numeros apilados a la izquierda, y el rotulo con el
+   dibujo a la derecha ocupando el alto entero. Al agrandar el dibujo, la
+   pila vertical de antes se salia de la casilla. */
 .tc{position:relative;background:rgba(35,42,37,.5);border:1px solid var(--line);
-    border-radius:2px;padding:9px 10px}
-.tc .hd{display:flex;align-items:flex-start;justify-content:space-between}
-.tc .pos{font-size:12px;font-weight:700;letter-spacing:.2em;color:var(--sand)}
-.tc .psi{font-size:44px;font-weight:700;line-height:.9;letter-spacing:-.02em;color:var(--bone);margin-top:9px}
+    border-radius:2px;padding:7px 10px;
+    display:grid;grid-template-columns:1fr auto;grid-template-rows:1fr 1fr;
+    column-gap:8px;align-items:center}
+/* El rotulo de rueda va a la DERECHA y encima del dibujo, y el dibujo
+   crece: a medio metro, el de 16x25 no se veia. */
+.tc .hd{grid-column:2;grid-row:1 / 3;display:flex;align-items:center;justify-content:center}
+.tc .marca{display:flex;flex-direction:column;align-items:center}
+.tc .pos{font-size:15px;font-weight:700;letter-spacing:.2em;color:var(--sand);margin-bottom:3px}
+.tc .psi{grid-column:1;grid-row:1;font-size:42px;font-weight:700;line-height:1;letter-spacing:-.02em;color:var(--bone);margin:0}
 .tc .psi i{font-size:11px;font-style:normal;font-weight:600;letter-spacing:.1em;color:var(--sand);margin-left:4px}
-.tc .tmp{font-size:11px;color:var(--mute);margin-top:8px;letter-spacing:.04em}
-.tc .km{width:16px;height:25px;flex:0 0 auto;color:var(--sand)}
-.tc .km svg{display:block;width:16px;height:25px}
+/* Temperatura al mismo tamano que la presion, por peticion del dueño:
+   en una casa rodante una llanta caliente dice tanto como una baja. */
+.tc .tmp{grid-column:1;grid-row:2;font-size:42px;font-weight:700;line-height:1;
+         letter-spacing:-.02em;color:var(--bone);margin:0}
+.tc .tmp i{font-size:11px;font-style:normal;font-weight:600;letter-spacing:.1em;
+           color:var(--sand);margin-left:4px}
+.tc .km{width:30px;height:47px;flex:0 0 auto;color:var(--sand)}
+.tc .km svg{display:block;width:30px;height:47px}
 
 .tc.alarm{border-color:var(--rust);background:rgba(237,122,69,.13);
           box-shadow:inset 3px 0 0 var(--rust)}
@@ -300,9 +337,10 @@ body{
 .cap{font-size:8.5px;font-weight:600;letter-spacing:.18em;color:var(--sand);
      text-transform:uppercase;height:15px;line-height:15px}
 .duo{grid-template-columns:1fr 1fr !important}
-.trio{display:grid;grid-template-columns:1fr 1fr 1fr;grid-gap:8px;gap:8px;margin-top:18px}
-.trio .v{font-size:20px;font-weight:600;color:var(--bone);margin-top:4px;line-height:1;white-space:nowrap}
-.trio .v i{font-size:10px;font-style:normal;font-weight:500;color:var(--sand);margin-left:2px}
+.trio{display:grid;grid-template-columns:1fr 1fr 1fr;grid-gap:8px;gap:8px;margin-top:12px}
+.trio .v{font-size:36px;font-weight:700;color:var(--bone);margin-top:5px;
+         line-height:1;white-space:nowrap;letter-spacing:-.02em}
+.trio .v i{font-size:13px;font-style:normal;font-weight:600;color:var(--sand);margin-left:2px}
 
 /* ============================ ACEITE ============================ */
 .oilfoot{margin-top:20px}
@@ -322,7 +360,7 @@ body{
      xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
   <defs>
     <pattern id="tick" width="128" height="120" patternUnits="userSpaceOnUse">
-      <path d="M64 54v12M58 60h12" stroke="#8E968A" stroke-width="1" opacity=".13"/>
+      <path d="M64 54v12M58 60h12" stroke="#8E968A" stroke-width="1" opacity=".26"/>
     </pattern>
     <g id="blob">
       <path d="M0,-100 C50,-102 92,-72 99,-28 C106,16 78,58 34,82 C-12,107 -66,98 -90,58
@@ -332,7 +370,7 @@ body{
 
   <rect width="1024" height="600" fill="url(#tick)"/>
 
-  <g fill="none" stroke="#C99A4E" stroke-width="1" opacity=".2">
+  <g fill="none" stroke="#C99A4E" stroke-width="1" opacity=".42">
     <!-- cerro 1 -->
     <g transform="translate(150,486)">
       <use xlink:href="#blob" href="#blob" transform="scale(.26)"/><use xlink:href="#blob" href="#blob" transform="scale(.44)"/>
@@ -351,7 +389,7 @@ body{
       <use xlink:href="#blob" href="#blob" transform="scale(2.14)"/>
     </g>
   </g>
-  <g fill="none" stroke="#7FA06A" stroke-width="1" opacity=".17">
+  <g fill="none" stroke="#7FA06A" stroke-width="1" opacity=".36">
     <!-- cerro 3, mas bajo -->
     <g transform="translate(566,588) rotate(-28)">
       <use xlink:href="#blob" href="#blob" transform="scale(.30)"/><use xlink:href="#blob" href="#blob" transform="scale(.56)"/>
@@ -443,16 +481,6 @@ body{
         <div class="bv"><span id="viv-h">~14</span><i>h</i></div>
       </div>
 
-      <div class="ded" style="height:52px;margin-top:12px">
-        <span class="dtag"><svg viewBox="0 0 16 16">
-          <path d="M2 6.1c1.5-2 3-2 4.5 0s3 2 4.5 0 3-2 3-2"/>
-          <path d="M2 10.5c1.5-2 3-2 4.5 0s3 2 4.5 0 3-2 3-2"/>
-        </svg>Deducido</span>
-        <div class="dgrid">
-          <div><div class="k">DC-DC</div><div class="dv" id="dcdc">Cargando</div></div>
-          <div><div class="k">Inversor</div><div class="dv"><span id="inv">164</span><i>W</i></div></div>
-        </div>
-      </div>
     </section>
 
     <!-- ---------- NEVERA ---------- -->
@@ -483,6 +511,13 @@ body{
         <div class="lb"><span>&minus;20 °C</span><span>0 °C</span></div>
       </div>
 
+      <div class="mandos">
+        <div class="btn grande" id="nev-menos">&minus;</div>
+        <div class="btn grande" id="nev-mas">+</div>
+        <div class="btn" id="nev-poder">Apagar</div>
+        <div class="btn" id="nev-eco">Eco</div>
+      </div>
+
       <div class="rowline">
         <div>
           <div class="k">Estado</div>
@@ -497,16 +532,6 @@ body{
         </div>
       </div>
 
-      <div class="ded" style="height:50px;margin-top:9px">
-        <span class="dtag"><svg viewBox="0 0 16 16">
-          <path d="M2 6.1c1.5-2 3-2 4.5 0s3 2 4.5 0 3-2 3-2"/>
-          <path d="M2 10.5c1.5-2 3-2 4.5 0s3 2 4.5 0 3-2 3-2"/>
-        </svg>Deducido</span>
-        <div style="width:100%;padding-top:5px">
-          <div class="k">Compresor</div>
-          <div class="dv" id="nev-comp">En marcha</div>
-        </div>
-      </div>
     </section>
 
     <!-- ---------- LLANTAS ---------- -->
@@ -526,7 +551,7 @@ body{
         <!-- delantera izquierda -->
         <div class="tc" id="ll0">
           <div class="hd">
-            <span class="pos">DI</span>
+            <span class="marca"><span class="pos">DI</span>
             <span class="km"><svg viewBox="0 0 18 28">
               <rect x="3.4" y="1.4" width="11.2" height="25.2" rx="2.4" fill="none" stroke="currentColor" stroke-width="1" opacity=".45"/>
               <path d="M5.6 8.6h6.8M5.6 19.4h6.8" stroke="currentColor" stroke-width="1" opacity=".3"/>
@@ -534,16 +559,16 @@ body{
               <rect x="14.5" y="4.6" width="3" height="5.2" rx="1" fill="currentColor" opacity=".2"/>
               <rect x="0.5" y="18.2" width="3" height="5.2" rx="1" fill="currentColor" opacity=".2"/>
               <rect x="14.5" y="18.2" width="3" height="5.2" rx="1" fill="currentColor" opacity=".2"/>
-            </svg></span>
+            </svg></span></span>
           </div>
           <div class="psi"><span id="ll0-psi">32</span><i>PSI</i></div>
-          <div class="tmp"><span id="ll0-t">28</span> °C</div>
+          <div class="tmp"><span id="ll0-t">28</span><i>°C</i></div>
         </div>
 
         <!-- delantera derecha -->
         <div class="tc" id="ll1">
           <div class="hd">
-            <span class="pos">DD</span>
+            <span class="marca"><span class="pos">DD</span>
             <span class="km"><svg viewBox="0 0 18 28">
               <rect x="3.4" y="1.4" width="11.2" height="25.2" rx="2.4" fill="none" stroke="currentColor" stroke-width="1" opacity=".45"/>
               <path d="M5.6 8.6h6.8M5.6 19.4h6.8" stroke="currentColor" stroke-width="1" opacity=".3"/>
@@ -551,16 +576,16 @@ body{
               <rect x="14.5" y="4.6" width="3" height="5.2" rx="1" fill="currentColor" opacity="1"/>
               <rect x="0.5" y="18.2" width="3" height="5.2" rx="1" fill="currentColor" opacity=".2"/>
               <rect x="14.5" y="18.2" width="3" height="5.2" rx="1" fill="currentColor" opacity=".2"/>
-            </svg></span>
+            </svg></span></span>
           </div>
           <div class="psi"><span id="ll1-psi">31</span><i>PSI</i></div>
-          <div class="tmp"><span id="ll1-t">29</span> °C</div>
+          <div class="tmp"><span id="ll1-t">29</span><i>°C</i></div>
         </div>
 
         <!-- trasera izquierda -->
         <div class="tc" id="ll2">
           <div class="hd">
-            <span class="pos">TI</span>
+            <span class="marca"><span class="pos">TI</span>
             <span class="km"><svg viewBox="0 0 18 28">
               <rect x="3.4" y="1.4" width="11.2" height="25.2" rx="2.4" fill="none" stroke="currentColor" stroke-width="1" opacity=".45"/>
               <path d="M5.6 8.6h6.8M5.6 19.4h6.8" stroke="currentColor" stroke-width="1" opacity=".3"/>
@@ -568,16 +593,16 @@ body{
               <rect x="14.5" y="4.6" width="3" height="5.2" rx="1" fill="currentColor" opacity=".2"/>
               <rect x="0.5" y="18.2" width="3" height="5.2" rx="1" fill="currentColor" opacity="1"/>
               <rect x="14.5" y="18.2" width="3" height="5.2" rx="1" fill="currentColor" opacity=".2"/>
-            </svg></span>
+            </svg></span></span>
           </div>
           <div class="psi"><span id="ll2-psi">30</span><i>PSI</i></div>
-          <div class="tmp"><span id="ll2-t">27</span> °C</div>
+          <div class="tmp"><span id="ll2-t">27</span><i>°C</i></div>
         </div>
 
         <!-- trasera derecha — LA UNICA QUE GRITA -->
         <div class="tc alarm" id="ll3">
           <div class="hd">
-            <span class="pos">TD</span>
+            <span class="marca"><span class="pos">TD</span>
             <span class="km"><svg viewBox="0 0 18 28">
               <rect x="3.4" y="1.4" width="11.2" height="25.2" rx="2.4" fill="none" stroke="currentColor" stroke-width="1" opacity=".55"/>
               <path d="M5.6 8.6h6.8M5.6 19.4h6.8" stroke="currentColor" stroke-width="1" opacity=".35"/>
@@ -585,10 +610,10 @@ body{
               <rect x="14.5" y="4.6" width="3" height="5.2" rx="1" fill="currentColor" opacity=".25"/>
               <rect x="0.5" y="18.2" width="3" height="5.2" rx="1" fill="currentColor" opacity=".25"/>
               <rect x="14.5" y="18.2" width="3" height="5.2" rx="1" fill="currentColor" opacity="1"/>
-            </svg></span>
+            </svg></span></span>
           </div>
           <div class="psi"><span id="ll3-psi">24</span><i>PSI</i></div>
-          <div class="tmp"><span id="ll3-t">31</span> °C
+          <div class="tmp"><span id="ll3-t">31</span><i>°C</i>
             <span class="flag" id="ll3-flag" style="display:none"><svg viewBox="0 0 16 16">
               <path d="M8 2.4 15 13.6H1z"/><path d="M8 6.6v3.4"/>
               <circle cx="8" cy="11.9" r=".75" fill="currentColor" stroke="none"/>
@@ -698,7 +723,7 @@ body{
         <div class="mid"><span id="arr-soc">100</span><i>%</i></div>
         <div style="margin-left:auto;text-align:right">
           <div class="k">Tensión</div>
-          <div class="v" style="font-size:26px;font-weight:600;line-height:1;margin-top:5px"><span id="arr-v">13.4</span><i style="font-size:11px;font-style:normal;font-weight:500;color:var(--sand);margin-left:3px">V</i></div>
+          <div class="v" style="font-size:36px;font-weight:700;line-height:1;margin-top:5px;letter-spacing:-.02em"><span id="arr-v">13.4</span><i style="font-size:11px;font-style:normal;font-weight:500;color:var(--sand);margin-left:3px">V</i></div>
         </div>
       </div>
 
@@ -759,6 +784,19 @@ body{
   var GUION = "\u2013\u2013";
 
   function el(id){ return document.getElementById(id); }
+
+  // Potencia con signo y color. Positivo = entra energia al banco.
+  function potencia(id, w){
+    var e = el(id); if(!e) return;
+    e.classList.remove("carga", "descarga");
+    if(w === null || w === undefined){
+      e.textContent = GUION; e.style.color = "var(--mute)"; return;
+    }
+    e.style.color = "";
+    e.textContent = (w > 0 ? "+" : "") + w;
+    if(w > 0) e.classList.add("carga");
+    else if(w < 0) e.classList.add("descarga");
+  }
 
   function pip(id, vivo){
     var e = el(id); if(!e) return;
@@ -826,7 +864,7 @@ body{
   function pintar(d){
     // --- vivienda ---
     set("viv-soc", d.vivSoc); set("viv-v", d.vivV, 1);
-    set("viv-w", d.vivW);
+    potencia("viv-w", d.vivW);
     set("viv-t", d.vivT);     set("viv-h", d.vivH);
     var b = el("viv-bar");
     if(b) b.style.width = (d.vivSoc === null || d.vivSoc === undefined ? 0 : d.vivSoc) + "%";
@@ -889,10 +927,28 @@ body{
     set("arr-nom", d.arrNom); set("arr-mac", d.arrMac);
     set("arr-soc", d.arrSoc);
     set("arr-v", d.arrV, 1);
-    set("arr-w", d.arrW);    set("arr-t", d.arrT);
+    potencia("arr-w", d.arrW);    set("arr-t", d.arrT);
     var ab = el("arr-bar");
     if(ab) ab.style.width = (d.arrSoc === null || d.arrSoc === undefined ? 0 : d.arrSoc) + "%";
     set("nev-on", d.nevOn);
+
+    // Los botones reflejan lo que la NEVERA dice, no lo que se mando.
+    ultimoEncendida = (d.nevOn === null || d.nevOn === undefined)
+      ? null : (d.nevOn === "Encendida");
+    ultimoEco = (d.nevEco === null || d.nevEco === undefined) ? null : !!d.nevEco;
+
+    var bp = el("nev-poder");
+    if(bp){
+      bp.textContent = (ultimoEncendida === null) ? GUION
+        : (ultimoEncendida ? "Apagar" : "Encender");
+      bp.classList.toggle("off", ultimoEncendida === null);
+    }
+    var be = el("nev-eco");
+    if(be){
+      be.classList.toggle("on", ultimoEco === true);
+      be.classList.toggle("off", ultimoEco === null);
+      be.textContent = (ultimoEco === null) ? GUION : (ultimoEco ? "Eco" : "Max");
+    }
     set("ace-km", d.aceKm); set("ace-h", d.aceH);
     set("hd-cod", d.codigos);
 
@@ -908,6 +964,29 @@ body{
     set("ace-pct", d.acePct);
     set("radio-t", d.radioC);
   }
+
+  // Los mandos. Un toque encola el comando; el boton NO se pinta al
+  // tocarlo. Se pinta cuando la nevera contesta con su estado nuevo — un
+  // boton que se enciende porque el tablero mando algo miente igual que un
+  // valor inventado, y aqui el enlace falla una de cada tres veces.
+  function mando(id, accion){
+    var e = el(id); if(!e) return;
+    e.addEventListener("click", function(){
+      try{ accion(); }catch(err){}
+    });
+  }
+  mando("nev-menos", function(){ Puente.neveraConsigna(-1); });
+  mando("nev-mas",   function(){ Puente.neveraConsigna(1); });
+  mando("nev-poder", function(){
+    if(ultimoEncendida === null) return;   // sin saber como esta, no se toca
+    Puente.neveraEncender(!ultimoEncendida);
+  });
+  mando("nev-eco", function(){
+    if(ultimoEco === null) return;
+    Puente.neveraEco(!ultimoEco);
+  });
+
+  var ultimoEncendida = null, ultimoEco = null;
 
   function tic(){
     try{

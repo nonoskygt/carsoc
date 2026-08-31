@@ -135,6 +135,24 @@ class TableroActivity : Activity() {
      */
     inner class Puente {
 
+        /**
+         * Los mandos de la nevera. Devuelven si se pudo ENCOLAR, no si la
+         * nevera obedecio: eso lo dira la siguiente lectura, y es la unica
+         * confirmacion que vale. Un boton que se pone verde porque el
+         * tablero mando algo miente igual que un valor inventado.
+         */
+        @JavascriptInterface
+        fun neveraEncender(on: Boolean): Boolean =
+            EstadoActual.nevera?.encender(on) ?: false
+
+        @JavascriptInterface
+        fun neveraEco(eco: Boolean): Boolean =
+            EstadoActual.nevera?.modoEco(eco) ?: false
+
+        @JavascriptInterface
+        fun neveraConsigna(delta: Int): Boolean =
+            EstadoActual.nevera?.moverConsigna(delta) ?: false
+
         @JavascriptInterface
         fun estado(): String {
             val ahora = System.currentTimeMillis()
@@ -218,6 +236,7 @@ class TableroActivity : Activity() {
             num("nevT", ne?.actual)
             num("nevSet", ne?.consigna)
             num("nevV", ne?.voltaje)
+            num("nevEco", ne?.modoEco)
             txt("nevOn", when (ne?.encendida) {
                 true -> "Encendida"; false -> "Apagada"; null -> null
             })
