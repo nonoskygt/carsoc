@@ -32,28 +32,47 @@ class PidSoportadosTest {
      *     F8 = 1111 1000 -> 11 12 13 14 15 .  .  .
      *     10 = 0001 0000 -> .  .  .  1C .  .  .  .
      */
-    private val RESPUESTA_REAL = "4100BE3EF810"
+    /**
+     * ⚠️ ESTA MASCARA ES DEL S2000, NO DEL ELEMENT.
+     *
+     * Se midio en el AP1 preguntandole `0100` a su ECU. Se conserva porque
+     * sigue siendo una respuesta REAL de una ECU real y prueba el
+     * descodificador contra algo que de verdad salio de un carro — que es
+     * mejor fixture que una cadena inventada.
+     *
+     * Pero NO describe a este carro. La mascara del Element esta SIN MEDIR:
+     * hace falta el adaptador OBD y el contacto puesto. Hasta entonces,
+     * cualquier afirmacion sobre que PIDs tiene el K24A4 es expectativa
+     * razonada, no dato — y este proyecto no pinta expectativas.
+     *
+     * Cuando se mida, se añade la del Element AL LADO de esta y se prueban
+     * las dos: dos mascaras reales de dos ECU distintas valen mas que una.
+     */
+    private val MASCARA_MEDIDA_EN_EL_AP1 = "4100BE3EF810"
 
-    private val PIDS_DEL_CARRO = listOf(
+    /** Los diecisiete PIDs que declara esa mascara del AP1. */
+    private val PIDS_DEL_AP1 = listOf(
         0x01, 0x03, 0x04, 0x05, 0x06, 0x07,
         0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
         0x11, 0x12, 0x13, 0x14, 0x15,
         0x1C,
     )
 
-    // --- La respuesta real del carro ----------------------------------------
+    // --- La respuesta real medida en el AP1 ----------------------------------------
 
     @Test
-    fun `la mascara real del carro es BE3EF810 y son diecisiete PIDs`() {
-        assertEquals(PIDS_DEL_CARRO, PidDecoder.soportados(RESPUESTA_REAL, 0x00))
+    fun `la mascara medida en el AP1 es BE3EF810 y son diecisiete PIDs`() {
+        assertEquals(PIDS_DEL_AP1, PidDecoder.soportados(MASCARA_MEDIDA_EN_EL_AP1, 0x00))
     }
 
     @Test
-    fun `la velocidad y el acelerador SI los tiene este carro`() {
+    fun `la velocidad y el acelerador estan en la mascara del AP1`() {
         // Se afirma porque el tablero los pide en cada vuelta del reparto: si
-        // un dia la mascara dejara de traerlos, la pantalla se quedaria con
-        // dos huecos y nadie sabria si es la ECU o el descodificador.
-        val lista = PidDecoder.soportados(RESPUESTA_REAL, 0x00)
+        // un dia el descodificador dejara de sacarlos de esta mascara, la
+        // pantalla se quedaria con dos huecos y nadie sabria si es la ECU o
+        // el descodificador. OJO: prueba el DESCODIFICADOR, no afirma nada
+        // sobre lo que tenga la ECU del Element, que esta sin medir.
+        val lista = PidDecoder.soportados(MASCARA_MEDIDA_EN_EL_AP1, 0x00)
         assertTrue("el 0D (velocidad) tiene que estar", lista.contains(0x0D))
         assertTrue("el 11 (acelerador) tiene que estar", lista.contains(0x11))
         // Y los otros cuatro de los que vive la pantalla.
@@ -65,7 +84,7 @@ class PidSoportadosTest {
 
     @Test
     fun `lo que este carro NO tiene, y por eso no hay que pedirlo`() {
-        val lista = PidDecoder.soportados(RESPUESTA_REAL, 0x00)
+        val lista = PidDecoder.soportados(MASCARA_MEDIDA_EN_EL_AP1, 0x00)
         // El complemento exacto dentro del bloque 01-20. Se enumera entero en
         // vez de mirar solo dos o tres porque un bit corrido mueve PIDs de un
         // lado al otro, y el fallo se ve justo aqui.
@@ -90,7 +109,7 @@ class PidSoportadosTest {
         // Este es el hallazgo que zanjo la discusion del AFR de banda ancha:
         // el mapa de esta ECU se corta en el 0x20, asi que el 0134 no es que
         // no conteste, es que no existe y nunca existio.
-        assertFalse(PidDecoder.hayMasBloques(RESPUESTA_REAL, 0x00))
+        assertFalse(PidDecoder.hayMasBloques(MASCARA_MEDIDA_EN_EL_AP1, 0x00))
     }
 
     // --- El bit que anuncia el bloque siguiente ------------------------------
@@ -152,9 +171,9 @@ class PidSoportadosTest {
         // El peor escenario del recorrido: la respuesta del bloque anterior
         // sigue en el buffer cuando ya se pregunto por el siguiente. Si colara,
         // el tablero creeria soportados PIDs del 0x21 al 0x40 que no existen.
-        assertEquals(emptyList<Int>(), PidDecoder.soportados(RESPUESTA_REAL, 0x20))
+        assertEquals(emptyList<Int>(), PidDecoder.soportados(MASCARA_MEDIDA_EN_EL_AP1, 0x20))
         assertEquals(emptyList<Int>(), PidDecoder.soportados("4120BE3EF810", 0x00))
-        assertFalse(PidDecoder.hayMasBloques(RESPUESTA_REAL, 0x20))
+        assertFalse(PidDecoder.hayMasBloques(MASCARA_MEDIDA_EN_EL_AP1, 0x20))
     }
 
     // --- Tolerancia de formato ----------------------------------------------
@@ -175,7 +194,7 @@ class PidSoportadosTest {
             "0100\rSEARCHING...\r41 00 BE 3E F8 10\r\r>",
         )
         for (v in variantes) {
-            assertEquals("fallo con '$v'", PIDS_DEL_CARRO, PidDecoder.soportados(v, 0x00))
+            assertEquals("fallo con '$v'", PIDS_DEL_AP1, PidDecoder.soportados(v, 0x00))
         }
     }
 
@@ -218,10 +237,10 @@ class PidSoportadosTest {
     fun `los bytes de relleno del final se ignoran`() {
         // Un ELM327 en modo CAN rellena la trama hasta ocho bytes. Solo los
         // cuatro primeros son la mascara.
-        assertEquals(PIDS_DEL_CARRO, PidDecoder.soportados("4100BE3EF8100000", 0x00))
+        assertEquals(PIDS_DEL_AP1, PidDecoder.soportados("4100BE3EF8100000", 0x00))
         // Y un nibble suelto al final (respuesta cortada a mitad de byte) no
         // puede tirar los cuatro bytes que si llegaron enteros.
-        assertEquals(PIDS_DEL_CARRO, PidDecoder.soportados("4100BE3EF8100", 0x00))
+        assertEquals(PIDS_DEL_AP1, PidDecoder.soportados("4100BE3EF8100", 0x00))
     }
 
     // --- Basura -------------------------------------------------------------
@@ -275,7 +294,7 @@ class PidSoportadosTest {
         assertTrue(PidDecoder.huboMascara("410000000000", 0x00))
         assertEquals(emptyList<Int>(), PidDecoder.soportados("410000000000", 0x00))
         // Y la respuesta buena del carro, obviamente, tambien es respuesta.
-        assertTrue(PidDecoder.huboMascara(RESPUESTA_REAL, 0x00))
+        assertTrue(PidDecoder.huboMascara(MASCARA_MEDIDA_EN_EL_AP1, 0x00))
     }
 
     @Test
@@ -336,7 +355,7 @@ class PidSoportadosTest {
         // El recorrido pregunta bloque a bloque y la respuesta anterior puede
         // seguir en el buffer. Que no cuente como mascara del bloque nuevo es
         // lo que impide dar por leido un mapa que no se leyo.
-        assertFalse(PidDecoder.huboMascara(RESPUESTA_REAL, 0x20))
+        assertFalse(PidDecoder.huboMascara(MASCARA_MEDIDA_EN_EL_AP1, 0x20))
         assertFalse(PidDecoder.huboMascara("4120BE3EF810", 0x00))
         assertTrue(PidDecoder.huboMascara("4120BE3EF810", 0x20))
     }
