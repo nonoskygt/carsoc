@@ -17,6 +17,11 @@ Son **hermanas, no forks**: un solo módulo con dos sabores que comparten el
 | Manda | el litio y la nevera | el motor |
 | Paquete | `com.nonosky.inmyelement` | `com.nonosky.s2000dash` |
 
+![El tablero del Element](docs/img/element-tablero.png)
+
+*In my element, con datos en todas las secciones. Lo que no se ha medido
+sale como `--`, nunca como cero.*
+
 ## Por qué existe
 
 Los tableros de fábrica de estos carros no dicen casi nada, y las apps de
@@ -70,6 +75,20 @@ diez pruebas que decodifican capturas reales.
 el motor concreto**: 102 para el K24A4, 81 para el F20C. Nada de códigos que
 ese carro no puede dar.
 
+## El menú de emparejamiento
+
+Cada aparato se asigna a mano a su papel. Nunca por barrido — así es
+justamente como se cruzaron las dos baterías.
+
+| In my element | S2000 Dash |
+|---|---|
+| ![](docs/img/emparejamiento.png) | ![](docs/img/emparejamiento-s2000.png) |
+
+El menú **solo ofrece lo que ese carro lleva**: el S2000 no tiene banco de
+vivienda ni refrigeradora, y no aparecen. Y un valor de fábrica se muestra
+marcado como tal, porque uno que parece elegido hace creer que alguien lo
+comprobó.
+
 ## Cómo está hecho
 
 - **Kotlin**, sin frameworks de UI. Vistas y dibujo en código.
@@ -81,6 +100,24 @@ ese carro no puede dar.
   entero desde una laptop, sin tocar la pantalla.
 - **Auto-actualización** por descubrimiento UDP, con verificación de firma
   del APK antes de instalar.
+
+## Probar sin carro
+
+Hay dos emuladores, uno por radio: `elementradio` a 1024×600 y `s2000radio`
+a 1280×480. Probar en la resolución equivocada no vale — es exactamente así
+como se descubrió que el tablero del S2000 se rompía.
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools/e2e.ps1
+```
+
+Compila los dos sabores, los instala, los abre, navega sus pantallas y deja
+las capturas en `build/e2e/`. Una prueba de interfaz que solo dice «pasó» y
+no enseña nada no vale de mucho.
+
+> Si el emulador nunca arranca, casi seguro es el diálogo de consentimiento
+> que aparece tras una caída previa y **bloquea el arranque esperando un
+> clic**. Por eso el script pasa `-no-metrics`.
 
 ## Construir
 
