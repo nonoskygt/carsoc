@@ -54,6 +54,10 @@ class TableroActivity : Activity() {
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.domStorageEnabled = false
+            // Sin esto la animacion de entrada sale MUDA: Android exige por
+            // omision un gesto del usuario antes de dejar sonar nada, y aqui
+            // no hay nadie tocando la pantalla al arrancar el carro.
+            settings.mediaPlaybackRequiresUserGesture = false
             // Sin zoom ni scroll: la pagina mide 1024x600 y ya.
             settings.builtInZoomControls = false
             settings.setSupportZoom(false)

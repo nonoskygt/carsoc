@@ -227,15 +227,68 @@ class ObdPairing(
         /** Los tres PIN que traen practicamente todos los clones de ELM327. */
         val COMMON_PINS = listOf("1234", "6789", "0000")
 
+        /**
+         * Nombres que delatan un adaptador OBD-II.
+         *
+         * Lista ANCHA a proposito: el dueño va a comprar un generico
+         * cualquiera, y de nada sirve una heuristica que solo reconoce las
+         * ocho marcas que ya teniamos. Los clones chinos se anuncian con
+         * media docena de nombres distintos y varios no llevan ni "OBD".
+         *
+         * Aun asi el nombre es solo una PISTA: la prueba de verdad es que el
+         * aparato ofrezca SPP y conteste `ATI`. Ver [pareceObdPorServicio].
+         */
         private val OBD_HINTS = listOf(
             "OBD", "ELM", "VLINK", "V-LINK", "VGATE", "KONNWEI",
             "STEREN", "SCAN", "ICAR", "VEEPEAK",
+            "OBDII", "OBD2", "ELM327", "OBDLINK", "STN",
+            "BAFX", "PANLONG", "LELINK", "CARISTA", "AUTEL",
+            "THINKDIAG", "ANCEL", "FOXWELL", "TOPDON", "LAUNCH",
+            "TONWON", "KWP", "CANOBD", "MINIVCI", "VIECAR",
+            "DIAGNOSTIC", "SCANNER", "CARSCAN", "TORQUE",
         )
+
+        /** El UUID de Serial Port Profile: por ahi hablan todos los ELM327. */
+        private val UUID_SPP =
+            java.util.UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
         @SuppressLint("MissingPermission")
         fun looksLikeObd(device: BluetoothDevice): Boolean {
             val name = runCatching { device.name }.getOrNull()?.uppercase() ?: return false
-            return OBD_HINTS.any { name.replace(" ", "").contains(it) }
+            return OBD_HINTS.any { name.replace(" ", "").replace("_", "").contains(it) }
         }
+
+        /**
+         * Ofrece Serial Port Profile, o sea que PODRIA ser un ELM327.
+         *
+         * Mas fiable que el nombre y mas laxo: un teclado o unos auriculares
+         * no ofrecen SPP. Se usa junto con [looksLikeObd] para ordenar los
+         * candidatos, nunca para elegir a ciegas — el proyecto ya guardo una
+         * vez como "adaptador OBD" cualquier aparato emparejado, y bastaba
+         * emparejar un telefono para romperlo.
+         */
+        @SuppressLint("MissingPermission")
+        fun pareceObdPorServicio(device: BluetoothDevice): Boolean = runCatching {
+            device.uuids?.any { it.uuid == UUID_SPP } == true
+        }.getOrDefault(false)
+
+        /**
+         * Ordena candidatos: primero los que suenan a OBD Y ofrecen SPP,
+         * despues los que solo suenan, y al final los que solo ofrecen SPP.
+         * Devuelve lista vacia si no hay ninguno plausible.
+         */
+        @SuppressLint("MissingPermission")
+        fun candidatos(aparatos: List<BluetoothDevice>): List<BluetoothDevice> =
+            aparatos.mapNotNull { d ->
+                val porNombre = looksLikeObd(d)
+                val porServicio = pareceObdPorServicio(d)
+                val nota = when {
+                    porNombre && porServicio -> 3
+                    porNombre -> 2
+                    porServicio -> 1
+                    else -> 0
+                }
+                if (nota == 0) null else d to nota
+            }.sortedByDescending { it.second }.map { it.first }
     }
 }
