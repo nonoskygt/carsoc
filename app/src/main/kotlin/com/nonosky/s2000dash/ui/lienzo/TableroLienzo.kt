@@ -183,7 +183,7 @@ class TableroLienzo(
     /** Una lectura y su reloj, que van juntos y por eso se toman juntos. */
     private fun latir() {
         ahora = System.currentTimeMillis()
-        datos = EstadoDelTablero.leer(ahora)
+        datos = EstadoDelTablero.leer(ahora, context)
     }
 
     /**
@@ -314,14 +314,18 @@ class TableroLienzo(
 
         when (evento.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                ahora = System.currentTimeMillis()
+                // Reloj propio: `ahora` es el del CUADRO y va emparejado con
+                // `datos`. Pisarlo aqui adelantaria el parpadeo respecto a la
+                // lectura que se esta pintando, que es justo lo que el reloj
+                // unico existe para impedir.
+                val toque = System.currentTimeMillis()
                 botonPulsado = when {
                     reparto.botonAverias.contiene(x, y) -> B_AVERIAS
                     reparto.botonAjustes.contiene(x, y) -> B_AJUSTES
                     else -> NADA
                 }
                 mandoPulsado =
-                    if (botonPulsado == NADA) PintaNevera.tocar(x, y, ahora) else null
+                    if (botonPulsado == NADA) PintaNevera.tocar(x, y, toque) else null
                 // El resalte es SOLO acuse de recibo del toque. Sin este
                 // `invalidate()` no se veria hasta el cuadro siguiente, que con
                 // el radio caliente es un segundo entero.

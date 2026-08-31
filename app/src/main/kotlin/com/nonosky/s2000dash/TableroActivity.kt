@@ -213,6 +213,53 @@ class TableroActivity : Activity(), TableroLienzo.Mandos {
      */
     inner class Puente {
 
+        // ---------------- calibracion de las llantas ----------------
+        //
+        // Los sensores TPMS baratos se desvian por una constante. Estos
+        // mandos dejan corregirlos desde el propio tablero, sosteniendo el
+        // dedo sobre la rueda, sin entrar en ajustes ni recompilar nada.
+
+        /** Mueve la correccion de una rueda. Devuelve la resultante en PSI. */
+        @JavascriptInterface
+        fun calibrarLlanta(rueda: Int, pasos: Int): Float =
+            com.nonosky.s2000dash.config.CalibracionLlantas
+                .mover(this@TableroActivity, rueda, pasos)
+
+        /** Deja esa rueda —o las cuatro, si esta puesto— sin correccion. */
+        @JavascriptInterface
+        fun calibrarACero(rueda: Int) {
+            com.nonosky.s2000dash.config.CalibracionLlantas
+                .poner(this@TableroActivity, rueda, 0f)
+        }
+
+        /**
+         * ¿Un toque corrige las cuatro a la vez? Encendido por omision: el
+         * desvio suele venir del juego entero de sensores o de comparar
+         * contra otro manometro, asi que corregir las cuatro acierta casi
+         * siempre.
+         */
+        @JavascriptInterface
+        fun calibrarTodasALaVez(): Boolean =
+            com.nonosky.s2000dash.config.CalibracionLlantas
+                .aplicarATodas(this@TableroActivity)
+
+        @JavascriptInterface
+        fun ponerCalibrarTodasALaVez(valor: Boolean) {
+            com.nonosky.s2000dash.config.CalibracionLlantas
+                .ponerAplicarATodas(this@TableroActivity, valor)
+        }
+
+        /** La correccion guardada de una rueda, para pintarla en el mando. */
+        @JavascriptInterface
+        fun ajusteLlanta(rueda: Int): Float =
+            com.nonosky.s2000dash.config.CalibracionLlantas
+                .ajuste(this@TableroActivity, rueda)
+
+        /** El paso de cada toque, para que la pantalla no lo suponga. */
+        @JavascriptInterface
+        fun pasoCalibracion(): Float =
+            com.nonosky.s2000dash.config.CalibracionLlantas.PASO_PSI
+
         @JavascriptInterface
         fun abrirConfiguracion() {
             abrirAjustes()
@@ -266,6 +313,7 @@ class TableroActivity : Activity(), TableroLienzo.Mandos {
          */
         @JavascriptInterface
         fun estado(): String =
-            EstadoDelTablero.aJson(EstadoDelTablero.leer(System.currentTimeMillis()))
+            EstadoDelTablero.aJson(
+                EstadoDelTablero.leer(System.currentTimeMillis(), this@TableroActivity))
     }
 }

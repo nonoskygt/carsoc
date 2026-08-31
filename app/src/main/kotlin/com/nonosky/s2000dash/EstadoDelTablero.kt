@@ -68,7 +68,13 @@ object EstadoDelTablero {
      * caliente— es mas barato que el `StringBuilder` de 1 KB que la variante
      * HTML fabrica en cada vuelta, que es lo que se hacia antes.
      */
-    fun leer(ahora: Long): DatosTablero {
+    /**
+     * @param contexto hace falta SOLO para la calibracion de las llantas.
+     *   Es opcional a proposito: sin el, las presiones salen tal cual las
+     *   da el sensor y nada mas cambia. Un tablero que se cae por no poder
+     *   leer una preferencia seria mucho peor que uno sin calibrar.
+     */
+    fun leer(ahora: Long, contexto: android.content.Context? = null): DatosTablero {
         val v = EstadoActual.ultimo
 
         // ---------- bancos ----------
@@ -204,14 +210,23 @@ object EstadoDelTablero {
             // lo que hacia el puente y lo que espera el HTML. Una alarma solo
             // se enciende con dato que la respalde; el hueco lo dicen la
             // presion y la temperatura, que si van a null.
-            ll0psi = t0?.presionPsi, ll0t = t0?.temperaturaC,
-            ll0baja = t0?.presionBaja ?: false,
-            ll1psi = t1?.presionPsi, ll1t = t1?.temperaturaC,
-            ll1baja = t1?.presionBaja ?: false,
-            ll2psi = t2?.presionPsi, ll2t = t2?.temperaturaC,
-            ll2baja = t2?.presionBaja ?: false,
-            ll3psi = t3?.presionPsi, ll3t = t3?.temperaturaC,
-            ll3baja = t3?.presionBaja ?: false,
+            // ⚠️ LA CALIBRACION SE APLICA AQUI, Y LA ALARMA SE RECALCULA.
+            //
+            // Los sensores TPMS baratos se desvian por una constante, asi
+            // que el dueño puede corregirlos rueda por rueda. Lo que NO
+            // puede pasar es que la correccion afecte solo a lo que se
+            // pinta: `presionBaja` viene de la trama CRUDA, asi que una
+            // rueda calibrada a -3 PSI daria la alarma tres libras antes de
+            // tiempo, todos los dias, hasta que el dueño aprendiera a
+            // ignorarla. Se recalcula contra el valor corregido.
+            ll0psi = psiCal(contexto, 0, t0?.presionPsi), ll0t = t0?.temperaturaC,
+            ll0baja = bajaCal(contexto, 0, t0),
+            ll1psi = psiCal(contexto, 1, t1?.presionPsi), ll1t = t1?.temperaturaC,
+            ll1baja = bajaCal(contexto, 1, t1),
+            ll2psi = psiCal(contexto, 2, t2?.presionPsi), ll2t = t2?.temperaturaC,
+            ll2baja = bajaCal(contexto, 2, t2),
+            ll3psi = psiCal(contexto, 3, t3?.presionPsi), ll3t = t3?.temperaturaC,
+            ll3baja = bajaCal(contexto, 3, t3),
 
             acePct = if (aceiteConfigurado) Mantenimiento.vidaPct else null,
             aceKm = if (aceiteConfigurado) Math.round(Mantenimiento.kmRestantes) else null,
@@ -293,4 +308,31 @@ object EstadoDelTablero {
         j.append('}')
         return j.toString()
     }
+
+/** La presion de esa rueda, ya corregida. null entra, null sale. */
+private fun psiCal(
+    contexto: android.content.Context?,
+    rueda: Int,
+    psi: Float?,
+): Float? {
+    val c = contexto ?: return psi
+    return com.nonosky.s2000dash.config.CalibracionLlantas.corregir(c, rueda, psi)
+}
+
+/**
+ * ¿Esa rueda esta baja, MIRANDO EL VALOR CORREGIDO?
+ *
+ * Se conservan las dos guardas del decodificador: sin trama no hay alarma,
+ * y una lectura fuera del rango fisico tampoco la enciende — un sensor que
+ * reporta basura no es una rueda pinchada.
+ */
+private fun bajaCal(
+    contexto: android.content.Context?,
+    rueda: Int,
+    t: com.nonosky.s2000dash.tpms.TramaTpms?,
+): Boolean {
+    if (t == null || t.presionFueraDeRango) return false
+    val psi = psiCal(contexto, rueda, t.presionPsi) ?: return false
+    return psi < com.nonosky.s2000dash.tpms.Escalas.PSI_AVISO_BAJA
+}
 }

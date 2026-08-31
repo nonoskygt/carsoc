@@ -330,15 +330,21 @@ body{
    roba el golpe de vista al neon y a la aguja. El ojo iria al sitio
    equivocado — que es exactamente lo que hacia el degradado metalico. */
 .bar .f-cold {position:absolute;top:0;bottom:0;left:0;
-              background:linear-gradient(180deg,#3B505E 0%,#1E2B33 100%)}
+              background:linear-gradient(180deg,#6B87A0 0%,#3A4C58 100%)}
 /* Y AQUI, solo aqui, el neon: el trozo de vuelta que se esta corriendo con
    las levas grandes. Es el unico relleno de color del tablero. */
 .bar .f-hot  {position:absolute;top:0;bottom:0;
               background:linear-gradient(180deg,#C4FF6B 0%,#6FBF17 100%)}
+/* Las ZONAS. Su relleno es translucido a proposito y se queda por debajo
+   de 3:1 contra el carril: un slab rojo brillante de 67 px encendido
+   siempre es justo lo que ciega de noche y le roba el grito a la unica
+   alarma del tablero. La informacion la llevan el FILETE de 1px a plena
+   fuerza (ambar 10,3:1 · rojo 6,5:1 contra el panel) y el rotulo que
+   nombra cada zona encima de ella. El relleno solo la tine. */
 .bar .z-amber{position:absolute;top:0;bottom:0;
-              background:rgba(255,180,60,.20);border-left:1px solid rgba(255,180,60,.9)}
+              background:rgba(255,180,60,.34);border-left:1px solid var(--amber)}
 .bar .z-red  {position:absolute;top:0;bottom:0;right:0;
-              background:rgba(255,106,85,.26);border-left:1px solid var(--red)}
+              background:rgba(255,106,85,.44);border-left:1px solid var(--red)}
 /* trama del carril: un segmento cada 250 rpm, que SE PUEDEN CONTAR */
 .bar .tk{position:absolute;top:0;bottom:0;left:0;right:0;
   background-image:repeating-linear-gradient(90deg,rgba(10,15,20,.55) 0 1px,transparent 1px 2.7778%)}
@@ -502,7 +508,7 @@ body{
    ALTA —1024x600— sobra alto: en vez de dejarlo en aire, se devuelve
    agrandando las cifras que de verdad se agradecen a 200 km/h. La condicion
    de min-height deja fuera a 800x480, que es cuadrada pero NO tiene alto. */
-@media (max-aspect-ratio:2/1) and (min-height:520px){
+@media (max-aspect-ratio:2/1) and (min-height:520px) and (max-height:700px){
   .rpm .n{font-size:13.6rem}
   .spd .n{font-size:8.2rem}
   .tc .psi{font-size:9.6rem}
@@ -523,18 +529,48 @@ body{
    "armado" (el numero del shift sigue ahi y ademas esta grabado en la
    regla), luego el bloque entero del shift. La linea "DEDUCIDO · RPM 5850
    + CARGA" NO se toca jamas: es la honestidad del dato. */
-@media (max-width:1200px){ .vtec .arm .aw{display:none} }
-@media (max-width:1140px){
+/* En pantallas MUY altas la raiz crece con el alto pero el ancho no
+   acompana, y la banda de VTEC es lo que se estrecha. El estado del shift
+   —que es lo prescindible de la banda— se retira tambien ahi. */
+@media (max-width:1200px), (min-height:660px){ .vtec .arm .aw{display:none} }
+@media (max-width:1140px), (min-height:660px){
   .vtec .arm{display:none}
   .vtec{padding:1rem 1.1rem;margin-left:1.2rem}
   .vtec .w{font-size:3.8rem}
   .vtec .bolt{width:2.4rem;height:2.4rem;margin-right:.8rem}
   .vtec .txt{margin-left:1rem}
+  /* El umbral esta grabado en la propia regla, dos centimetros mas abajo y
+     en el mismo verde. Al estrecharse, el numero se va de la linea de
+     honestidad — nunca la palabra DEDUCIDO, que es el aviso. */
+  .vtec .dc .dn{display:none}
+  /* del chip de rancio queda la EDAD, que es el dato; que no hay valor ya
+     lo dicen el "--", el rebaje oscuro y el gris */
+  .cell .old .ow{display:none}
 }
-/* El umbral de VTEC esta grabado en la propia regla, dos centimetros mas
-   abajo y en el mismo verde. Si el panel se estrecha, el numero se va de
-   la linea de honestidad —nunca la palabra DEDUCIDO, que es el aviso. */
-@media (max-width:940px){ .vtec .dc .dn{display:none} }
+/* A 800x480 la banda mide 190 px y la linea de honestidad necesita 138.
+   Se va el RAYO, que es un glifo decorativo: el borde neon, la palabra
+   VTEC en verde y "ENGANCHADO" sostienen el acontecimiento igual de bien.
+   Primero cae el adorno, despues la metadata, y el dato nunca. */
+@media (max-width:940px), (max-aspect-ratio:3/2){
+  .vtec{padding:.9rem .9rem}
+  .vtec .bolt{display:none}
+  .vtec .w{font-size:3.4rem}
+}
+/* Proporciones por debajo de 3:2 (pantallas casi cuadradas) quedan fuera
+   del encargo, pero no se dejan rotas: ahi tambien cede el adorno y el
+   segundo subrotulo de la mezcla, que es el unico texto largo que sobra. */
+@media (max-aspect-ratio:3/2){
+  .mix .lbl .s .sw{display:none}
+  .vtec .dc .dn{display:none}
+  .vtec .w{font-size:3rem}
+  .vtec .st{font-size:2.1rem}
+}
+/* Ultima red, para tamanos por debajo de los tres del encargo: antes que
+   recortar la linea de honestidad con puntos suspensivos, que se parta en
+   dos renglones. Solo actua cuando de verdad no cabe. */
+@media (max-width:820px), (max-aspect-ratio:3/2){
+  .vtec .dc{white-space:normal;text-overflow:clip}
+}
 
 @media (max-width:900px){
   .rl .mt{display:none}
@@ -544,9 +580,6 @@ body{
      nombre de la zona, su color y la escala 0-9 de debajo, y ademas el
      rotulo de la region ya dice "zona roja 8300 · corte 9000" */
   .marks .mn{display:none}
-  /* del chip de rancio queda la EDAD, que es el dato; que no hay valor ya
-     lo dicen el "--", el rebaje oscuro y el gris */
-  .cell .old .ow{display:none}
 }
 </style>
 </head>
@@ -829,7 +862,7 @@ body{
         </span>
         <span class="lbl">
           <span class="k">Mezcla &middot; ajustes</span>
-          <span class="s">banda estrecha &middot; corto + largo</span>
+          <span class="s">banda estrecha<b class="sw"> &middot; corto + largo</b></span>
         </span>
         <span class="trim"><span id="m-trim">&minus;4</span><i>%</i></span>
       </div>
