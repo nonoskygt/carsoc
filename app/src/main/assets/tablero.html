@@ -895,6 +895,7 @@ body{
         <span class="ld"></span>
         <span class="mt" id="obd-lect">ISO 9141-2 &middot; 6.7 lect/s</span>
         <span class="diagbtn" id="btn-diag">Averías</span>
+        <span class="diagbtn" id="btn-config">Ajustes</span>
       </div>
 
       <div class="motorwrap">
@@ -1245,6 +1246,7 @@ body{
     });
   }
   mando("btn-diag", function(){ Puente.abrirDiagnostico(); });
+  mando("btn-config", function(){ Puente.abrirConfiguracion(); });
   mando("nev-menos", function(){ Puente.neveraConsigna(-1); });
   mando("nev-mas",   function(){ Puente.neveraConsigna(1); });
   mando("nev-poder", function(){

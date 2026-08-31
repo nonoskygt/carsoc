@@ -153,6 +153,15 @@ class TableroActivity : Activity() {
          * se maneja. Se abre a mano, se usa, se cierra, y al cerrarse suelta
          * la tabla.
          */
+        /** Abre el menu de configuracion y emparejamiento. */
+        @JavascriptInterface
+        fun abrirConfiguracion() {
+            runCatching {
+                startActivity(Intent(this@TableroActivity,
+                    com.nonosky.s2000dash.config.ConfiguracionActivity::class.java))
+            }
+        }
+
         @JavascriptInterface
         fun abrirDiagnostico() {
             runCatching {

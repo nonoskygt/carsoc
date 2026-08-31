@@ -4,6 +4,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.util.Log
+import com.nonosky.s2000dash.config.Emparejados
 import kotlin.concurrent.thread
 
 /**
@@ -65,10 +66,37 @@ class BancosBateria(private val context: Context) {
      * el problema de saber cual es cual — pero el nombre viaja en el anuncio y
      * no siempre llega, asi que manda la MAC.
      */
-    val vivienda = Banco("viv", MAC_VIVIENDA, "Elementos 300AH")
-    val arranque = Banco("arr", MAC_ARRANQUE, "Element Motor")
+    /**
+     * Los bancos que este carro tiene, con el aparato que el dueño les
+     * asigno en el menu de emparejamiento.
+     *
+     * Ya no hay MAC escritas aqui: el S2000 lleva un solo banco y el Element
+     * dos, y cual es cual lo decide el dueño, no el orden en que aparezcan
+     * en un barrido.
+     */
+    val arranque = Banco(
+        "arr",
+        Emparejados.mac(context, Emparejados.Papel.BancoArranque),
+        Emparejados.nombre(context, Emparejados.Papel.BancoArranque)
+            .ifBlank { "Batería de arranque" },
+    )
 
-    private val todos = listOf(vivienda, arranque)
+    val vivienda: Banco? =
+        if (!com.nonosky.s2000dash.PerfilVehiculo.TIENE_BANCO_VIVIENDA) null
+        else Banco(
+            "viv",
+            Emparejados.mac(context, Emparejados.Papel.BancoVivienda),
+            Emparejados.nombre(context, Emparejados.Papel.BancoVivienda)
+                .ifBlank { "Batería de vivienda" },
+        )
+
+    /**
+     * Solo los que TIENEN aparato asignado. Un banco sin MAC no se sondea:
+     * intentar conectar a una cadena vacia gasta un turno de radio por
+     * ciclo y ensucia el registro con fallos que no son fallos.
+     */
+    private val todos: List<Banco>
+        get() = listOfNotNull(vivienda, arranque).filter { it.mac.isNotBlank() }
 
     @Volatile private var vivo = false
     private var hilo: Thread? = null
@@ -180,14 +208,6 @@ class BancosBateria(private val context: Context) {
 
     companion object {
         private const val TAG = "BancosBateria"
-
-        /**
-         * Medidas en el carro con un barrido BLE del propio radio, y
-         * confirmadas contra la app de fabrica del BMS, que las muestra con
-         * los nombres que les puso el dueño.
-         */
-        const val MAC_VIVIENDA = "A5:C2:37:09:18:EE"
-        const val MAC_ARRANQUE = "A4:C1:38:3B:B9:5E"
 
         /** Cada cuanto se da una vuelta completa a los dos bancos. */
         const val PERIODO_MS = 8_000L

@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.util.Log
+import com.nonosky.s2000dash.config.Emparejados
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -32,6 +33,10 @@ import kotlin.concurrent.thread
  * pulsando un boton, y la nevera obedece igual sin el.
  */
 class LectorNevera(private val context: Context) {
+
+    /** El aparato asignado al papel de nevera. Vacio = no hay. */
+    private val mac: String
+        get() = Emparejados.mac(context, Emparejados.Papel.Nevera)
 
     @Volatile var estado: Alpicool.Estado? = null
         private set
@@ -127,7 +132,7 @@ class LectorNevera(private val context: Context) {
         val e = estado
         val edad = if (leidoMs > 0) "${(System.currentTimeMillis() - leidoMs) / 1000}s" else "nunca"
         return listOf(
-            "mac=$MAC  leido=$edad  ${detalle ?: ""}",
+            "mac=$mac  leido=$edad  ${detalle ?: ""}",
             if (e == null) "sin estado" else
                 "encendida=${e.encendida}  actual=${e.actual}  consigna=${e.consigna}  " +
                     "histeresis=${e.histeresis}  unidad=${if (e.unidadCelsius) "C" else "F"}  " +
@@ -150,7 +155,7 @@ class LectorNevera(private val context: Context) {
     /** Una vuelta completa: conectar, suscribir, preguntar, cerrar. */
     private fun unaLectura() {
         val adapter = adaptador() ?: run { detalle = "sin BluetoothAdapter"; return }
-        val dev: BluetoothDevice = runCatching { adapter.getRemoteDevice(MAC) }.getOrNull()
+        val dev: BluetoothDevice = runCatching { adapter.getRemoteDevice(mac) }.getOrNull()
             ?: run { detalle = "MAC invalida"; return }
 
         val conectado = CountDownLatch(1)
@@ -200,7 +205,7 @@ class LectorNevera(private val context: Context) {
         try {
             gatt = dev.connectGatt(context, false, cb)
             if (!conectado.await(MS_CONECTAR, TimeUnit.MILLISECONDS) || muerto.get()) {
-                detalle = "no conecto"; anotar("no conecto con $MAC"); return
+                detalle = "no conecto"; anotar("no conecto con $mac"); return
             }
             if (!descubierto.await(MS_DESCUBRIR, TimeUnit.MILLISECONDS)) {
                 detalle = "no descubrio servicios"; return
@@ -278,8 +283,12 @@ class LectorNevera(private val context: Context) {
     companion object {
         private const val TAG = "LectorNevera"
 
-        /** Medida en el carro: `ED:67:39:96:50:9B  A1-4XXXXXXXXXXX  uuids=00001234`. */
-        const val MAC = "ED:67:39:96:50:9B"
+        /**
+         * La MAC ya NO va escrita aqui: la elige el dueño en el menu de
+         * emparejamiento. Se midio `ED:67:39:96:50:9B  A1-4XXXXXXXXXXX
+         * uuids=00001234` en el carro y eso es el valor de fabrica del
+         * perfil, pero cambiar de nevera no debe obligar a recompilar.
+         */
 
         val SERVICIO: UUID = UUID.fromString("00001234-0000-1000-8000-00805f9b34fb")
         /** Algunas unidades anuncian fff0; las caracteristicas no cambian. */

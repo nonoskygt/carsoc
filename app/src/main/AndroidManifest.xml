@@ -136,6 +136,19 @@
             android:theme="@style/Theme.S2000Dash" />
 
         <!--
+          Configuracion y emparejamiento. Decide QUE aparato hace cada papel:
+          baterias, refrigeradora y adaptador OBD. Se abre con el carro
+          parado, se usa y se cierra.
+        -->
+        <activity
+            android:name=".config.ConfiguracionActivity"
+            android:exported="false"
+            android:label="Configuración"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.S2000Dash" />
+
+        <!--
           La pantalla de averias. APARTE del tablero a proposito: carga 36 KB
           de tabla de codigos y abre su propia conexion al OBD, y nada de eso
           hace falta mientras se maneja. Se abre a mano, se usa, se cierra, y
