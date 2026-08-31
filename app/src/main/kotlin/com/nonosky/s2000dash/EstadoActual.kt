@@ -278,6 +278,16 @@ object EstadoActual {
     var vigilanteBateria: com.nonosky.s2000dash.bateria.VigilanteBateria? = null
 
     /**
+     * Los DOS bancos de litio del Element, cada uno fijado por su MAC.
+     *
+     * Convive con [vigilanteBateria] a proposito y no lo sustituye: aquel
+     * barre y se queda con el primer JBD que ve, que con dos bancos iguales
+     * significa que cual te toca es cuestion de suerte. El tablero lee de
+     * aqui; las rutas de diagnostico del puente siguen usando el vigilante.
+     */
+    var bancos: com.nonosky.s2000dash.bateria.BancosBateria? = null
+
+    /**
      * Conecta con el BMS y lo lee AHORA, devolviendo la traza paso a paso.
      *
      * Es para diagnosticar: una pila Bluetooth escrita a mano falla en algun

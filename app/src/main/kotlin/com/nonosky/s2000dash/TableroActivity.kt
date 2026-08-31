@@ -2,6 +2,10 @@ package com.nonosky.s2000dash
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -30,6 +34,13 @@ class TableroActivity : Activity() {
     /** El VTEC se deduce con histeresis, asi que hay que recordar el estado. */
     private var vtecEnganchado = false
 
+    private companion object {
+        /** El receptor TPMS: un CH340/CH341. */
+        const val VID_CH340 = 0x1A86
+        const val PID_CH340 = 0x7523
+        const val ACCION_PERMISO_USB = "com.nonosky.inmyelement.PERMISO_USB"
+    }
+
     @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +68,34 @@ class TableroActivity : Activity() {
 
         EstadoActual.vista = web
         DashService.arrancar(this)
+        pedirPermisoDelReceptorTpms()
+    }
+
+    /**
+     * Pide el permiso USB del receptor TPMS, UNA vez y solo si falta.
+     *
+     * `TpmsReader` se niega a pedirlo, y hace bien: corre en el servicio, con
+     * el tablero cerrado y el carro solo, y un dialogo que nadie contesta es
+     * peor que un mensaje claro por el puente. Pero la Activity si tiene
+     * pantalla y alguien delante, asi que este es su sitio.
+     *
+     * Junto con el filtro `USB_DEVICE_ATTACHED` del manifiesto, contestarlo
+     * una vez marcando "usar por omision" lo deja concedido para siempre.
+     */
+    private fun pedirPermisoDelReceptorTpms() {
+        runCatching {
+            val um = getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
+            val dev = um.deviceList.values.firstOrNull {
+                it.vendorId == VID_CH340 && it.productId == PID_CH340
+            } ?: return
+            if (um.hasPermission(dev)) return
+            val pi = PendingIntent.getBroadcast(
+                this, 0, Intent(ACCION_PERMISO_USB).setPackage(packageName),
+                if (android.os.Build.VERSION.SDK_INT >= 31)
+                    PendingIntent.FLAG_IMMUTABLE else 0,
+            )
+            um.requestPermission(dev, pi)
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -116,24 +155,35 @@ class TableroActivity : Activity() {
             }
 
             // ---------- banco de vivienda ----------
-            val bat = EstadoActual.vigilanteBateria?.estado
-            // OJO: NO se usa detectada(), que solo mira si hay MAC. El lector
-            // por la radio interna publica lecturas buenas con la MAC en null,
-            // y exigirla dejaba la tarjeta en "--" teniendo el dato delante.
-            // Lo que hace viva a una lectura es tener voltaje y ser reciente.
-            val batViva = bat != null && bat.voltaje != null && !bat.rancia(ahora)
-            num("vivSoc", if (batViva) bat!!.soc else null)
-            num("vivV", if (batViva) bat!!.voltaje else null)
-            num("vivA", if (batViva) bat!!.corrienteA else null)
-            num("vivW", if (batViva) bat!!.potenciaW?.let { Math.round(it) } else null)
-            num("vivT", if (batViva) bat!!.temperaturaC else null)
+            // Cada banco viene fijado por su MAC. Ya no se adivina cual es
+            // cual: el vigilante viejo se quedaba con el primer JBD que veia,
+            // y con dos bancos iguales el rotulo de la pantalla era una
+            // suposicion — el dueño vio la de arranque bajo el rotulo de
+            // vivienda, y tenia razon.
+            val bancos = EstadoActual.bancos
+            val viv = bancos?.vivienda
+            val arr = bancos?.arranque
+            val vivViva = viv != null && viv.vivo(ahora)
+            val arrViva = arr != null && arr.vivo(ahora)
+
+            num("vivSoc", if (vivViva) viv!!.soc else null)
+            num("vivV", if (vivViva) viv!!.voltaje else null)
+            num("vivA", if (vivViva) viv!!.corrienteA else null)
+            num("vivW", if (vivViva) viv!!.potenciaW?.let { Math.round(it) } else null)
+            num("vivT", if (vivViva) viv!!.temperaturaC else null)
             txt("vivH", null)   // autonomia: pendiente de historial de consumo
+            // El rotulo y la MAC salen del banco, no del HTML. Asi la tarjeta
+            // no puede volver a decir que es una bateria que no es.
+            txt("vivNom", viv?.rotulo)
+            txt("vivMac", viv?.mac)
+            txt("arrNom", arr?.rotulo)
+            txt("arrMac", arr?.mac)
 
             // ---------- deducidos del banco de vivienda ----------
             // El inversor y el cargador DC-DC no tienen Bluetooth. Se infieren
             // del signo de la corriente del banco; si no hay banco, no se
             // inventa nada.
-            val amp = if (batViva) bat!!.corrienteA else null
+            val amp = if (vivViva) viv!!.corrienteA else null
             val motorGirando = (v.rpm ?: 0) > 300 && fresco(v.rpmAtMs)
             txt("dcdc", when {
                 amp == null -> null
@@ -141,17 +191,15 @@ class TableroActivity : Activity() {
                 motorGirando -> "Sin carga"
                 else -> "Motor parado"
             })
-            num("inversorW", if (amp != null && amp < -0.5f && batViva)
-                bat!!.potenciaW?.let { Math.round(-it) } else null)
+            num("inversorW", if (amp != null && amp < -0.5f && vivViva)
+                viv!!.potenciaW?.let { Math.round(-it) } else null)
 
             // ---------- banco de arranque ----------
-            // Pendiente: hoy el vigilante sostiene UN solo BMS. Hasta que
-            // sostenga dos, la tarjeta entera sale en "--". Se manda null
-            // campo por campo a proposito: dejar los valores del boceto
-            // pintados seria pintar la lectura de un aparato que no esta
-            // conectado, que es la mentira mas cara de este proyecto.
-            num("arrSoc", null); num("arrV", null)
-            num("arrA", null);   num("arrW", null); num("arrT", null)
+            num("arrSoc", if (arrViva) arr!!.soc else null)
+            num("arrV", if (arrViva) arr!!.voltaje else null)
+            num("arrA", if (arrViva) arr!!.corrienteA else null)
+            num("arrW", if (arrViva) arr!!.potenciaW?.let { Math.round(it) } else null)
+            num("arrT", if (arrViva) arr!!.temperaturaC else null)
 
             // ---------- nevera ----------
             // Pendiente de implementar el enlace Alpicool.
@@ -234,8 +282,8 @@ class TableroActivity : Activity() {
             // presiones se quedan congeladas en su ultimo valor bueno y
             // siguen pareciendo correctas: el punto es lo unico que lo
             // delata. Cada uno dice si ESA fuente esta dando datos ahora.
-            num("okViv", batViva)
-            num("okArr", false)   // pendiente: un solo BMS sostenido
+            num("okViv", vivViva)
+            num("okArr", arrViva)
             num("okNev", false)   // pendiente: enlace Alpicool
             num("okTpms", tp != null && tp.ruedas.isNotEmpty())
             num("okObd", fresco(v.rpmAtMs) || fresco(v.coolantAtMs))

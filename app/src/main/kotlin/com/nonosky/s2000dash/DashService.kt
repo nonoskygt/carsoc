@@ -105,6 +105,7 @@ class DashService : Service() {
         // contaran con el tablero abierto, el intervalo mediria cuanto mira
         // el dueño la pantalla y no cuanto anda el carro.
         arrancarKilometraje()
+        arrancarBancosDeLitio()
         registrarInterruptores()
 
         vivo = true
@@ -612,6 +613,23 @@ class DashService : Service() {
      * algo que ya corre, y pedir a 1 Hz solo añadiria calor a un radio que ya
      * se apago tres veces por eso.
      */
+    /**
+     * Los dos bancos de litio, cada uno por su MAC.
+     *
+     * Se arranca de entrada —al contrario que el motor y que el vigilante
+     * viejo— porque en una casa rodante el litio es el dato que se mira
+     * acampado, o sea el 90 % del tiempo que la pantalla esta encendida. El
+     * guardian termico lo suspende solo si el radio se calienta.
+     */
+    private fun arrancarBancosDeLitio() {
+        runCatching {
+            val b = com.nonosky.s2000dash.bateria.BancosBateria(applicationContext)
+            b.alCambiar = { runCatching { EstadoActual.vista?.postInvalidate() } }
+            EstadoActual.bancos = b
+            b.arrancar()
+        }.onFailure { Log.w(TAG, "no arrancaron los bancos: ${it.message}") }
+    }
+
     private fun arrancarKilometraje() {
         // Si ya hay uno pedido, no se pide otro. Ahora que el GPS se enciende y
         // se apaga solo, esta funcion se llama muchas veces, y sin esta guarda

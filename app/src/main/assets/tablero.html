@@ -407,9 +407,9 @@ body{
           <path d="M3.9 6.5v3.4M6.3 6.5v3.4M8.7 6.5v3.4"/>
         </svg></span>
         <span class="nm i-moss">Vivienda</span>
-        <span class="sub">Elementos 300AH</span>
+        <span class="sub" id="viv-nom">Elementos 300AH</span>
         <span class="ld"></span>
-        <span class="mt">A5:C2:37:09:18:EE</span>
+        <span class="mt" id="viv-mac">A5:C2:37:09:18:EE</span>
       </div>
 
       <div class="hero">
@@ -678,10 +678,10 @@ body{
         </svg></span>
         <span class="nm i-moss">Arranque</span>
         <span class="ld"></span>
-        <span class="mt">A4:C1:38:3B:B9:5E</span>
+        <span class="mt" id="arr-mac">A4:C1:38:3B:B9:5E</span>
       </div>
 
-      <div class="cap">Element Motor</div>
+      <div class="cap" id="arr-nom">Element Motor</div>
 
       <div style="display:flex;align-items:center;height:64px">
         <div class="mid"><span id="arr-soc">100</span><i>%</i></div>
@@ -856,6 +856,11 @@ body{
     avisoLlantas(bajas);
 
     // --- arranque, aceite, radio ---
+    // El rotulo y la MAC de cada banco vienen del servicio, no del HTML.
+    // Escritos a mano, la tarjeta llego a decir que era una bateria que no
+    // era: el vigilante viejo leia el primer JBD que veia.
+    set("viv-nom", d.vivNom); set("viv-mac", d.vivMac);
+    set("arr-nom", d.arrNom); set("arr-mac", d.arrMac);
     set("arr-soc", d.arrSoc);
     set("arr-v", d.arrV, 1); set("arr-a", d.arrA, 1);
     set("arr-w", d.arrW);    set("arr-t", d.arrT);

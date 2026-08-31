@@ -106,6 +106,23 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              El receptor TPMS por USB.
+
+              Sin esto el permiso hay que conceder a mano CADA vez que se
+              enchufa, y el servicio arranca antes de que nadie pueda
+              contestar el dialogo: el puente reportaba "SinPermiso" con el
+              receptor perfectamente enumerado. Con el filtro, Android ofrece
+              abrir el tablero al conectarlo y el permiso queda concedido de
+              forma permanente.
+            -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/tpms_usb" />
         </activity>
 
         <!-- El tablero viejo del S2000, en Canvas. Se conserva alcanzable
