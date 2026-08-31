@@ -60,7 +60,9 @@ class TableroActivity : Activity() {
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
-            setBackgroundColor(0xFF131715.toInt())
+            // Transparente: el velo y las tarjetas los pinta el HTML, y
+            // por los huecos asoma el fondo de pantalla del radio.
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             addJavascriptInterface(Puente(), "Puente")
             loadUrl("file:///android_asset/tablero.html")
         }

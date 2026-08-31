@@ -41,7 +41,9 @@
 html,body{
   width:1024px;height:600px;
   overflow:hidden;                 /* sin scroll de ninguna clase */
-  background:var(--ink0);
+  /* TRANSPARENTE: por aqui asoma el fondo de pantalla del radio.
+     El velo va en .frame, no aqui, para poder graduarlo en un solo sitio. */
+  background:transparent;
 }
 
 body{
@@ -54,10 +56,16 @@ body{
 }
 
 /* ---------- capa de fondo: curvas de nivel ---------- */
-#relieve{position:fixed;top:0;left:0;width:1024px;height:600px;z-index:0;pointer-events:none}
+#relieve{position:fixed;top:0;left:0;width:1024px;height:600px;z-index:0;pointer-events:none;opacity:.45}
 
 /* ---------- rejilla maestra ---------- */
-.frame{position:relative;z-index:1;width:1024px;height:600px;padding:12px;overflow:hidden}
+/* Velo sobre el fondo del radio.
+   Un tablero se lee manejando y de noche, y la transparencia se paga en
+   contraste: sin velo, un fondo claro se come las etiquetas. Con 0.62 el
+   fondo se reconoce entre las tarjetas y el texto sigue por encima de
+   4.5:1. Subir a 0.8 lo hace mas legible; bajar a 0.4, mas bonito y peor. */
+.frame{position:relative;z-index:1;width:1024px;height:600px;padding:12px;
+       overflow:hidden;background:rgba(19,23,21,.62)}
 
 .row{display:grid;grid-template-columns:396px 264px 320px;grid-gap:10px;gap:10px}
 .row1{height:296px;margin-top:10px}
@@ -65,7 +73,7 @@ body{
 .row2{height:216px;margin-top:10px;grid-template-columns:500px 220px 260px}
 
 .card{
-  height:100%;background:var(--ink1);
+  height:100%;background:rgba(26,32,28,.78);
   border:1px solid var(--line);border-radius:3px;
   padding:12px 14px;position:relative;overflow:hidden;
   box-shadow:inset 0 1px 0 rgba(237,228,211,.045);
@@ -102,7 +110,7 @@ body{
 /* ============================ CABECERA ============================ */
 .top{
   height:44px;display:flex;align-items:center;padding:0 12px;
-  background:rgba(26,32,28,.72);border:1px solid var(--line);border-radius:3px;
+  background:rgba(26,32,28,.58);border:1px solid var(--line);border-radius:3px;
 }
 .brand{display:flex;align-items:center}
 .brand .mark{width:26px;height:26px;margin-right:9px;color:var(--ocher)}
@@ -135,6 +143,7 @@ body{
 
 /* ============================ VIVIENDA ============================ */
 .hero{display:flex;align-items:center;height:88px}
+.mg3{grid-template-columns:1fr 1fr 1fr !important}
 .mg{display:grid;grid-template-columns:1fr 1fr;grid-gap:7px 10px;gap:7px 10px;flex:1 1 auto;margin-left:14px}
 .mg .v{font-size:21px;font-weight:600;line-height:1.06;color:var(--bone);margin-top:3px;white-space:nowrap}
 .mg .v i{font-size:11px;font-style:normal;font-weight:500;color:var(--sand);margin-left:3px}
@@ -290,6 +299,7 @@ body{
 /* ============================ ARRANQUE ============================ */
 .cap{font-size:8.5px;font-weight:600;letter-spacing:.18em;color:var(--sand);
      text-transform:uppercase;height:15px;line-height:15px}
+.duo{grid-template-columns:1fr 1fr !important}
 .trio{display:grid;grid-template-columns:1fr 1fr 1fr;grid-gap:8px;gap:8px;margin-top:18px}
 .trio .v{font-size:20px;font-weight:600;color:var(--bone);margin-top:4px;line-height:1;white-space:nowrap}
 .trio .v i{font-size:10px;font-style:normal;font-weight:500;color:var(--sand);margin-left:2px}
@@ -414,9 +424,10 @@ body{
 
       <div class="hero">
         <div class="big"><span id="viv-soc">78</span><i>%</i></div>
-        <div class="mg">
+        <!-- Sin amperios, por peticion del dueño: los vatios ya dicen
+             cuanto entra o sale, y el voltaje dice como esta el banco. -->
+        <div class="mg mg3">
           <div><div class="k">Tensión</div><div class="v"><span id="viv-v">13.2</span><i>V</i></div></div>
-          <div><div class="k">Corriente</div><div class="v"><span id="viv-a">&minus;12.4</span><i>A</i></div></div>
           <div><div class="k">Potencia</div><div class="v"><span id="viv-w">&minus;164</span><i>W</i></div></div>
           <div><div class="k">Celdas</div><div class="v"><span id="viv-t">39</span><i>°C</i></div></div>
         </div>
@@ -693,8 +704,7 @@ body{
 
       <div class="meter" style="margin-top:8px"><div class="fill" id="arr-bar" style="width:100%"></div><div class="tk"></div></div>
 
-      <div class="trio">
-        <div><div class="k">Corriente</div><div class="v"><span id="arr-a">+2.1</span><i>A</i></div></div>
+      <div class="trio duo">
         <div><div class="k">Potencia</div><div class="v"><span id="arr-w">+28</span><i>W</i></div></div>
         <div><div class="k">Celdas</div><div class="v"><span id="arr-t">31</span><i>°C</i></div></div>
       </div>
@@ -816,7 +826,7 @@ body{
   function pintar(d){
     // --- vivienda ---
     set("viv-soc", d.vivSoc); set("viv-v", d.vivV, 1);
-    set("viv-a", d.vivA, 1);  set("viv-w", d.vivW);
+    set("viv-w", d.vivW);
     set("viv-t", d.vivT);     set("viv-h", d.vivH);
     var b = el("viv-bar");
     if(b) b.style.width = (d.vivSoc === null || d.vivSoc === undefined ? 0 : d.vivSoc) + "%";
@@ -862,7 +872,7 @@ body{
     set("viv-nom", d.vivNom); set("viv-mac", d.vivMac);
     set("arr-nom", d.arrNom); set("arr-mac", d.arrMac);
     set("arr-soc", d.arrSoc);
-    set("arr-v", d.arrV, 1); set("arr-a", d.arrA, 1);
+    set("arr-v", d.arrV, 1);
     set("arr-w", d.arrW);    set("arr-t", d.arrT);
     var ab = el("arr-bar");
     if(ab) ab.style.width = (d.arrSoc === null || d.arrSoc === undefined ? 0 : d.arrSoc) + "%";

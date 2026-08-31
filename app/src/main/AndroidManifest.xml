@@ -101,7 +101,7 @@
             android:screenOrientation="landscape"
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
-            android:theme="@style/Theme.S2000Dash">
+            android:theme="@style/Theme.Tablero">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
