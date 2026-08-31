@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
 import com.nonosky.s2000dash.DashService
+import com.nonosky.s2000dash.EstadoActual
 import com.nonosky.s2000dash.obd.Dtc
 import kotlin.concurrent.thread
 
@@ -74,6 +75,30 @@ class DiagnosticoActivity : Activity() {
         }
     }
 
+    /**
+     * Suelta el adaptador ANTES de leer, y espera a que se entere.
+     *
+     * ⚠️ Cierra una deuda que la bitacora dejo apuntada: esta pantalla
+     * llamaba al lector A PELO mientras el sondeo seguia corriendo. Con un
+     * solo adaptador atendiendo un unico enlace RFCOMM, eso son dos sockets
+     * contra el mismo aparato: o el segundo muere, o —peor— el clon acepta
+     * los dos, una respuesta de RPM cae dentro del buffer del modo 03 y se
+     * decodifica como averias que el carro NO TIENE.
+     *
+     * Se reutiliza el gancho del puente en vez de duplicar su logica. Los
+     * seis segundos NO son de manual: con dos, medido en el carro, el
+     * transporte se lanzaba contra un adaptador todavia ocupado y una
+     * peticion tardo cuatro minutos en vez de medio.
+     */
+    private fun soltarElAdaptador(): String? {
+        val soltar = EstadoActual.soltarBluetooth ?: return null
+        return runCatching {
+            val dicho = soltar()
+            Thread.sleep(MS_SOLTAR_ADAPTADOR)
+            dicho
+        }.getOrNull()
+    }
+
     private fun lector(): LectorDtc {
         val adapter = runCatching {
             (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -82,8 +107,9 @@ class DiagnosticoActivity : Activity() {
     }
 
     fun leerCodigos() {
-        vista.trabajando("Leyendo la computadora del carro...")
+        vista.trabajando("Soltando el adaptador y leyendo la computadora...")
         thread(isDaemon = true) {
+            soltarElAdaptador()
             val r = runCatching { lector().leer() }.getOrElse {
                 LectorDtc.Resultado(error = "${it.javaClass.simpleName}: ${it.message}")
             }
@@ -92,13 +118,18 @@ class DiagnosticoActivity : Activity() {
     }
 
     fun borrarCodigos() {
-        vista.trabajando("Borrando...")
+        vista.trabajando("Soltando el adaptador y borrando...")
         thread(isDaemon = true) {
+            soltarElAdaptador()
             val r = runCatching { lector().borrar() }.getOrElse {
                 LectorDtc.Resultado(error = "${it.javaClass.simpleName}: ${it.message}")
             }
             runOnUiThread { vista.mostrar(r, borrado = true) }
         }
+    }
+    private companion object {
+        /** Medido en el carro: con dos segundos no basta. */
+        const val MS_SOLTAR_ADAPTADOR = 6_000L
     }
 }
 

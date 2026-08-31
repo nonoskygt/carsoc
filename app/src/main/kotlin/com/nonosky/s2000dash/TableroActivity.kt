@@ -145,6 +145,22 @@ class TableroActivity : Activity() {
          * confirmacion que vale. Un boton que se pone verde porque el
          * tablero mando algo miente igual que un valor inventado.
          */
+        /**
+         * Abre la pantalla de averias.
+         *
+         * Va APARTE del tablero a proposito: carga la tabla de codigos y abre
+         * su propia conexion al adaptador, y nada de eso hace falta mientras
+         * se maneja. Se abre a mano, se usa, se cierra, y al cerrarse suelta
+         * la tabla.
+         */
+        @JavascriptInterface
+        fun abrirDiagnostico() {
+            runCatching {
+                startActivity(Intent(this@TableroActivity,
+                    com.nonosky.s2000dash.diag.DiagnosticoActivity::class.java))
+            }
+        }
+
         @JavascriptInterface
         fun neveraEncender(on: Boolean): Boolean =
             EstadoActual.nevera?.encender(on) ?: false
