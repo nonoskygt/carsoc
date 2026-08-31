@@ -838,6 +838,22 @@ body{
     set("nev-t", d.nevT); set("nev-set", d.nevSet);
     set("nev-v", d.nevV, 1); set("nev-comp", d.nevComp);
 
+    // Carril termico: la marca es la consigna, el punto la temperatura real.
+    // Los extremos los dicta la propia nevera (min/max seleccionables), no
+    // una constante inventada.
+    var lo = (d.nevMin === null || d.nevMin === undefined) ? -20 : d.nevMin;
+    var hi = (d.nevMax === null || d.nevMax === undefined) ? 20  : d.nevMax;
+    function enCarril(id, val){
+      var e = el(id); if(!e) return;
+      if(val === null || val === undefined || hi <= lo){ e.style.display = "none"; return; }
+      e.style.display = "";
+      var p = (val - lo) / (hi - lo);
+      e.style.left = (Math.max(0, Math.min(1, p)) * 100).toFixed(1) + "%";
+    }
+    enCarril("nev-mset", d.nevSet);
+    enCarril("nev-mnow", d.nevT);
+    var lb = document.querySelector("#nev-mset") ? null : null;
+
     // --- motor ---
     set("m-agua", d.agua);   set("m-rpm", d.rpm);
     set("m-aire", d.aire);   set("m-carga", d.carga);

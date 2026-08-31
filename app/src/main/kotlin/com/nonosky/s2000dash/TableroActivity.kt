@@ -186,10 +186,18 @@ class TableroActivity : Activity() {
             // del signo de la corriente del banco; si no hay banco, no se
             // inventa nada.
             val amp = if (vivViva) viv!!.corrienteA else null
-            val motorGirando = (v.rpm ?: 0) > 300 && fresco(v.rpmAtMs)
+            // ⚠️ SE DISTINGUE "el motor esta parado" de "no se si lo esta".
+            // Sin enlace con la ECU no hay rpm, y traducir esa ausencia a
+            // "Motor parado" es afirmar algo que nadie ha medido — el mismo
+            // error que hacia decir "SIN AVERIAS" sin haber hablado con la
+            // computadora. Con el motor girando de verdad y esta linea
+            // diciendo "parado", el dueño creeria que el DC-DC no carga.
+            val sabemosDelMotor = fresco(v.rpmAtMs)
+            val motorGirando = sabemosDelMotor && (v.rpm ?: 0) > 300
             txt("dcdc", when {
                 amp == null -> null
-                amp > 0.5f && motorGirando -> "Cargando"
+                !sabemosDelMotor -> "Sin enlace al motor"
+                motorGirando && amp > 0.5f -> "Cargando"
                 motorGirando -> "Sin carga"
                 else -> "Motor parado"
             })
@@ -204,9 +212,24 @@ class TableroActivity : Activity() {
             num("arrT", if (arrViva) arr!!.temperaturaC else null)
 
             // ---------- nevera ----------
-            // Pendiente de implementar el enlace Alpicool.
-            num("nevT", null); num("nevSet", null)
-            num("nevV", null); txt("nevComp", null); txt("nevOn", null)
+            val nev = EstadoActual.nevera
+            val nevViva = nev != null && nev.vivoAhora(ahora)
+            val ne = if (nevViva) nev!!.estado else null
+            num("nevT", ne?.actual)
+            num("nevSet", ne?.consigna)
+            num("nevV", ne?.voltaje)
+            txt("nevOn", when (ne?.encendida) {
+                true -> "Encendida"; false -> "Apagada"; null -> null
+            })
+            // El compresor NO existe en el protocolo: se deduce comparando
+            // temperatura contra consigna mas histeresis. Por eso la tarjeta
+            // lo enseña dentro del recinto de "deducido".
+            txt("nevComp", when (ne?.compresorEnMarcha()) {
+                true -> "En marcha"; false -> "Parado"; null -> null
+            })
+            // Para colocar el punto y la marca en el carril termico.
+            num("nevMin", ne?.minima)
+            num("nevMax", ne?.maxima)
 
             // ---------- motor ----------
             num("agua", if (fresco(v.coolantAtMs)) v.coolantC else null)
@@ -286,7 +309,7 @@ class TableroActivity : Activity() {
             // delata. Cada uno dice si ESA fuente esta dando datos ahora.
             num("okViv", vivViva)
             num("okArr", arrViva)
-            num("okNev", false)   // pendiente: enlace Alpicool
+            num("okNev", nevViva)
             num("okTpms", tp != null && tp.ruedas.isNotEmpty())
             num("okObd", fresco(v.rpmAtMs) || fresco(v.coolantAtMs))
 

@@ -287,6 +287,9 @@ object EstadoActual {
      */
     var bancos: com.nonosky.s2000dash.bateria.BancosBateria? = null
 
+    /** La refrigeradora Alpicool. Conecta, pregunta y suelta. */
+    var nevera: com.nonosky.s2000dash.nevera.LectorNevera? = null
+
     /**
      * Conecta con el BMS y lo lee AHORA, devolviendo la traza paso a paso.
      *

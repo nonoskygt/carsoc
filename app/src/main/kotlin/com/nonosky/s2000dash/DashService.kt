@@ -106,6 +106,7 @@ class DashService : Service() {
         // el dueño la pantalla y no cuanto anda el carro.
         arrancarKilometraje()
         arrancarBancosDeLitio()
+        arrancarNevera()
         registrarInterruptores()
 
         vivo = true
@@ -628,6 +629,19 @@ class DashService : Service() {
             EstadoActual.bancos = b
             b.arrancar()
         }.onFailure { Log.w(TAG, "no arrancaron los bancos: ${it.message}") }
+    }
+
+    /**
+     * La nevera. Va con los bancos y no con el motor: acampado, la
+     * temperatura de la nevera importa mas que ningun dato de la ECU.
+     */
+    private fun arrancarNevera() {
+        runCatching {
+            val n = com.nonosky.s2000dash.nevera.LectorNevera(applicationContext)
+            n.alCambiar = { runCatching { EstadoActual.vista?.postInvalidate() } }
+            EstadoActual.nevera = n
+            n.arrancar()
+        }.onFailure { Log.w(TAG, "no arranco la nevera: ${it.message}") }
     }
 
     private fun arrancarKilometraje() {
