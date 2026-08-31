@@ -120,7 +120,7 @@ class AlpicoolTest {
         val base = Alpicool.Estado(
             encendida = true, consigna = -15, actual = -13,
             minima = -20, maxima = 20, histeresis = 2,
-            unidadCelsius = true, voltaje = 12.3f,
+            unidadCelsius = true, voltaje = 12.3f, modoEco = false,
         )
         // -13 > -15+2 = -13 -> falso: justo en el limite NO arranca
         assertEquals(false, base.compresorEnMarcha())
