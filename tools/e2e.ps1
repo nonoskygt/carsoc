@@ -68,8 +68,12 @@ $sabores = @(
 foreach ($s in $sabores) {
   Write-Host ("`n[2] " + $s.clave) -ForegroundColor Cyan
 
-  & $GRADLE ":app:$($s.tarea)" --console=plain -q 2>&1 | Out-Null
   $apk = Join-Path $RAIZ $s.apk
+  # Con -rapido se salta la compilacion si el APK ya existe. Util cuando se
+  # itera sobre la prueba y no sobre el codigo.
+  if (-not ($args -contains "-rapido") -or -not (Test-Path $apk)) {
+    & $GRADLE ":app:$($s.tarea)" --console=plain -q 2>&1 | Out-Null
+  }
   Comprobar "compila" (Test-Path $apk)
   if (-not (Test-Path $apk)) { continue }
 
@@ -98,7 +102,13 @@ foreach ($s in $sabores) {
 
   # Cada carro ofrece SOLO sus papeles: el S2000 no tiene banco de
   # vivienda ni nevera, y su menu no debe ofrecerlos.
-  $texto = (& $ADB shell "uiautomator dump /dev/tty" 2>$null) -join " "
+  # A fichero y no a /dev/tty: volcar la UI a la terminal se cuelga.
+  & $ADB shell uiautomator dump /sdcard/ui.xml 2>$null | Out-Null
+  & $ADB pull /sdcard/ui.xml "$SALIDA\ui-$($s.clave).xml" 2>&1 | Out-Null
+  $texto = ""
+  if (Test-Path "$SALIDA\ui-$($s.clave).xml") {
+    $texto = Get-Content "$SALIDA\ui-$($s.clave).xml" -Raw
+  }
   if ($texto -match "Bater") {
     $tieneVivienda = $texto -match "vivienda"
     $tieneNevera   = $texto -match "efrigerador"
