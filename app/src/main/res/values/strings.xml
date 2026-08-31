@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">S2000 Dash</string>
+    <string name="app_name">In my element</string>
     <string name="choose_adapter">Adaptador OBD</string>
     <string name="needs_bluetooth">Sin permiso de Bluetooth no hay tablero</string>
     <string name="needs_location_scan">Android pide permiso de ubicación para buscar por Bluetooth</string>

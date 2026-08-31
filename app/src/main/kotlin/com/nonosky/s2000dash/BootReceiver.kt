@@ -33,7 +33,7 @@ class BootReceiver : BroadcastReceiver() {
         // seria mucho peor que el problema que resuelve.
         if (accion == DashService.ACCION_RESUCITAR) return
 
-        val abrir = Intent(context, DashActivity::class.java).apply {
+        val abrir = Intent(context, TableroActivity::class.java).apply {
             // Desde un receiver no hay actividad de origen.
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }

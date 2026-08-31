@@ -8,13 +8,18 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.nonosky.s2000dash"
+        // Distinto del S2000 a proposito: son dos carros y dos aparatos, y con
+        // el mismo applicationId el actualizador de uno se traga el APK del
+        // otro. El namespace de Kotlin sigue siendo com.nonosky.s2000dash
+        // (renombrarlo es una pasada aparte); AGP resuelve los nombres
+        // relativos del manifest contra el namespace, no contra este id.
+        applicationId = "com.nonosky.inmyelement"
         // El radio corre Android 11 (API 30). minSdk 21 deja margen por si
         // el tablero acaba en otro head unit mas viejo.
         minSdk = 21
         targetSdk = 34
-        versionCode = 108
-        versionName = "10.4"
+        versionCode = 200
+        versionName = "1.0-element"
     }
 
     buildTypes {

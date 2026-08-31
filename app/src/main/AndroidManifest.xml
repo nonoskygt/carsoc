@@ -88,8 +88,15 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.S2000Dash">
 
+        <!--
+          El tablero de "In my element". WebView sobre el diseño aprobado.
+
+          Este radio es un MediaTek AC8257 de ocho nucleos al 72 % ocioso; la
+          razon que obligaba a Canvas en el rk3326 del S2000 aqui no existe, y
+          a cambio la pantalla se itera sin recompilar.
+        -->
         <activity
-            android:name=".DashActivity"
+            android:name=".TableroActivity"
             android:exported="true"
             android:screenOrientation="landscape"
             android:launchMode="singleTop"
@@ -100,6 +107,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- El tablero viejo del S2000, en Canvas. Se conserva alcanzable
+             por intent mientras el nuevo no cubra todo lo que aquel hacia. -->
+        <activity
+            android:name=".DashActivity"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.S2000Dash" />
 
         <!--
           La pantalla de averias. APARTE del tablero a proposito: carga 36 KB
