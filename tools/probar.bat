@@ -56,7 +56,13 @@ echo   [2/4] Buscando emulador %AVD%...
 "%ADB%" devices | findstr /C:"emulator-" >nul
 if errorlevel 1 (
   echo         arrancando ^(tarda un par de minutos en frio^)...
-  start "" /min "%EMU%" -avd %AVD% -no-boot-anim -gpu swiftshader_indirect
+  REM -no-metrics es OBLIGATORIO. Si el emulador se cayo alguna vez, al
+  REM arrancar saca un dialogo de consentimiento que BLOQUEA el arranque
+  REM esperando un clic. Con la ventana minimizada ese dialogo NO SE VE:
+  REM el proceso vive, qemu come memoria, y adb no lo encuentra jamas.
+  REM Costo dos horas encontrarlo, en una linea perdida entre trazas de
+  REM GPU: "Showing crashdialog to get consent". Con esto arranca en 40 s.
+  start "" /min "%EMU%" -avd %AVD% -no-boot-anim -no-metrics -gpu swiftshader_indirect
 ) else (
   echo         ya hay uno corriendo.
 )
