@@ -8,18 +8,52 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        // Distinto del S2000 a proposito: son dos carros y dos aparatos, y con
-        // el mismo applicationId el actualizador de uno se traga el APK del
-        // otro. El namespace de Kotlin sigue siendo com.nonosky.s2000dash
-        // (renombrarlo es una pasada aparte); AGP resuelve los nombres
-        // relativos del manifest contra el namespace, no contra este id.
-        applicationId = "com.nonosky.inmyelement"
+        // El applicationId lo pone cada sabor. Ver `productFlavors`.
         // El radio corre Android 11 (API 30). minSdk 21 deja margen por si
         // el tablero acaba en otro head unit mas viejo.
         minSdk = 21
         targetSdk = 34
         versionCode = 200
-        versionName = "1.0-element"
+        versionName = "1.0"
+    }
+
+    /**
+     * DOS CARROS, UNA BASE. Los sabores son hermanos, no forks.
+     *
+     * Comparten TODO menos cuatro cosas, que viven en `src/<sabor>/`:
+     *   EngineConstants.kt   los numeros del motor (F20C vs K24A4)
+     *   PerfilVehiculo.kt    quien es el carro y que hardware lleva
+     *   res/raw/dtc.txt      la tabla de averias de ESE motor
+     *   res/values/strings   el nombre de la app
+     *
+     * ⚠️ applicationId DISTINTO y OBLIGATORIO. Con el mismo, el actualizador
+     * de un carro se traga el APK del otro, lo rechaza por paquete, y se
+     * queda sin actualizar para siempre sin que nadie se entere. Ya estaba
+     * apuntado como trampa antes de que existiera el segundo carro.
+     */
+    flavorDimensions += "carro"
+
+    productFlavors {
+        create("element") {
+            dimension = "carro"
+            applicationId = "com.nonosky.inmyelement"
+            // El token del descubrimiento UDP tambien va por carro, por la
+            // misma razon que el applicationId.
+            buildConfigField("String", "TOKEN_DESCUBRIMIENTO", "\"INMYELEMENT\"")
+            buildConfigField("String", "CARRO", "\"element\"")
+            versionNameSuffix = "-element"
+        }
+        create("s2000") {
+            dimension = "carro"
+            applicationId = "com.nonosky.s2000dash"
+            buildConfigField("String", "TOKEN_DESCUBRIMIENTO", "\"S2000DASH\"")
+            buildConfigField("String", "CARRO", "\"s2000\"")
+            versionNameSuffix = "-s2000"
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -48,6 +82,11 @@ android {
     sourceSets {
         getByName("main").java.srcDirs("src/main/kotlin")
         getByName("test").java.srcDirs("src/test/kotlin")
+        getByName("element").java.srcDirs("src/element/kotlin")
+        getByName("s2000").java.srcDirs("src/s2000/kotlin")
+        // Las pruebas que afirman cifras de UN motor viven con su sabor.
+        getByName("testElement").java.srcDirs("src/testElement/kotlin")
+        getByName("testS2000").java.srcDirs("src/testS2000/kotlin")
     }
 
     testOptions {
