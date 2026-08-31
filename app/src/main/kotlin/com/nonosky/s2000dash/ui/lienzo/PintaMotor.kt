@@ -507,10 +507,15 @@ object PintaMotor {
             rect.set(cVtec.x0 + m, cVtec.y0 + m, cVtec.x1 - m, cVtec.y1 - m)
             canvas.drawRoundRect(rect, r, r, trazo)
 
-            // La barra de la izquierda, que es lo que se ve de reojo.
+            // La barra de la izquierda, que es lo que se ve de reojo. Su ancho
+            // es el `inset 3px` del HTML sobre una franja de 38, y se queda
+            // POR DENTRO del margen de [cVtecDentro]: mas gruesa se metia
+            // debajo del rayo. Que el S2000 lo viva como un acontecimiento se
+            // dice con el fondo y con el tamaño del texto, no ensanchando esto.
             relleno.color = Pincel.MUSGO
-            val ancho = cVtec.menor * (if (grande) 0.14f else 0.08f)
-            canvas.drawRect(cVtec.x0, cVtec.y0, cVtec.x0 + ancho, cVtec.y1, relleno)
+            canvas.drawRect(
+                cVtec.x0, cVtec.y0, cVtec.x0 + cVtec.menor * 0.08f, cVtec.y1, relleno,
+            )
         } else {
             // El recinto discontinuo de lo deducido.
             pincel.recintoDeducido(canvas, cVtec)
@@ -555,11 +560,13 @@ object PintaMotor {
         palabra.textAlign = Paint.Align.LEFT
         palabra.color = if (on) Pincel.TINTA else Pincel.APAGADO
         palabra.textSize = alto * 0.34f
-        val letras = encoge(palabra, "VTEC", libre, alto * 0.34f, alto * 0.34f * Pincel.SUELO)
-        if (letras > 0) canvas.drawText("VTEC", 0, letras, tras, linea(palabra, dentro), palabra)
-        if (letras < 4) cupo = false
+        val letras = encoge(palabra, NOMBRE, libre, alto * 0.34f, alto * 0.34f * Pincel.SUELO)
+        if (letras > 0) canvas.drawText(NOMBRE, 0, letras, tras, linea(palabra, dentro), palabra)
+        // Media palabra no nombra nada: "VT" al lado de "ENGANCHADO" no dice de
+        // que va lo enganchado. Recortar el nombre cuenta como no caber.
+        if (letras < NOMBRE.length) cupo = false
 
-        val restante = libre - palabra.measureText("VTEC", 0, letras) - alto * 0.22f
+        val restante = libre - palabra.measureText(NOMBRE, 0, letras) - alto * 0.22f
         rotulito.textAlign = Paint.Align.LEFT
         rotulito.textSize = alto * 0.185f
         rotulito.color = if (on) Pincel.ARENA else Pincel.APAGADO
@@ -749,8 +756,16 @@ object PintaMotor {
     /** Reloj 150, rejilla 310. Los mismos numeros que el CSS. */
     private val PESOS_CUERPO = floatArrayOf(150f, 310f)
 
-    /** Con sonda: manda la esfera. */
-    private val PESOS_RELOJ = floatArrayOf(142f, 22f)
+    /**
+     * Con sonda: manda la esfera.
+     *
+     * En el HTML el pie de ajustes ocupa 22 de los 164, pero alli el rotulo
+     * "Ajustes" es 0,6 del valor y aqui [Pincel.ETIQUETA_FILA] lo pone en
+     * 0,24 del alto de la caja. Con 22 salia una etiqueta de 5 px —medida, no
+     * supuesta— que no se lee ni parado. Se le dan 36: la esfera pierde un 8 %
+     * de radio y el pie gana una etiqueta legible, que es el cambio bueno.
+     */
+    private val PESOS_RELOJ = floatArrayOf(128f, 36f)
 
     /** Sin sonda: la esfera se encoge y mandan los ajustes. */
     private val PESOS_RELOJ_MUDO = floatArrayOf(96f, 68f)
@@ -782,6 +797,8 @@ object PintaMotor {
     private const val FONDO_VTEC_FUERTE = 0x449CBE7A
 
     private const val DEDUCIDO = "DEDUCIDO"
+
+    private const val NOMBRE = "VTEC"
 
     /**
      * El titulo, ya montado.
@@ -918,7 +935,7 @@ object PintaMotor {
         }
 
         private companion object {
-            /** Espacio fino, el mismo que usa la variante HTML. */
+            /** Espacio fino U+2009 —invisible aqui—, el que usa la variante HTML. */
             const val FINO = ' '
         }
     }

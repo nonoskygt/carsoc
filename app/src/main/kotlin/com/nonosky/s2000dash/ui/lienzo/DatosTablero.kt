@@ -157,4 +157,41 @@ data class DatosTablero(
          */
         val VACIO = DatosTablero()
     }
+
+    // ---- acceso a las llantas POR INDICE ------------------------------
+    //
+    // Los cuatro campos sueltos (ll0psi, ll1psi...) son comodos para el
+    // JSON y horribles para dibujar cuatro casillas en un bucle. Estos
+    // helpers existen para que el pintor no tenga un `when` de cuatro
+    // ramas repetido tres veces.
+    //
+    // Orden: 0 delantera izquierda, 1 delantera derecha,
+    //        2 trasera izquierda,   3 trasera derecha.
+
+    /** Presion de la rueda [i], o null si no hay lectura. */
+    fun psiDe(i: Int): Float? = when (i) {
+        0 -> ll0psi; 1 -> ll1psi; 2 -> ll2psi; 3 -> ll3psi; else -> null
+    }
+
+    /** Temperatura de la rueda [i], o null. */
+    fun tempDe(i: Int): Int? = when (i) {
+        0 -> ll0t; 1 -> ll1t; 2 -> ll2t; 3 -> ll3t; else -> null
+    }
+
+    /**
+     * ¿Esa rueda esta baja?
+     *
+     * Devuelve false ante la duda, no null: una alarma solo se enciende
+     * cuando hay dato que la respalde. Encenderla porque no sabemos seria
+     * exactamente al reves de la regla del proyecto.
+     */
+    fun bajaDe(i: Int): Boolean = when (i) {
+        0 -> ll0baja; 1 -> ll1baja; 2 -> ll2baja; 3 -> ll3baja; else -> null
+    } == true
+
+    /** Los indices de las ruedas que estan bajas. Vacio si ninguna. */
+    fun ruedasBajas(): List<Int> = (0..3).filter { bajaDe(it) }
 }
+
+/** Rotulos cortos de rueda, en el mismo orden que los indices. */
+val RUEDAS = listOf("DI", "DD", "TI", "TD")

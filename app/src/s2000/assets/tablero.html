@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>S2000 · Tablero</title>
+<style>
+/* ==========================================================================
+   HONDA S2000 AP1 · F20C — TABLERO  (sabor s2000)
+   Direccion de arte: INSTRUMENTO DE PRECISION.
+   Cyberpunk por RESTRICCION, no por vocabulario: ni lineas de escaneo, ni
+   esquinas mordidas, ni resplandores de parabrisas, ni rejillas de
+   sintetizador. UN acento neon que aparece en DOS sitios y en ninguno mas.
+
+   HERMANO DEL ELEMENT, NO GEMELO.
+     comparte -> rotulo de region (icono+nombre+sub+guia+meta), cifras
+                 tabulares, recinto punteado de lo deducido, dato rancio
+                 apagado con "--", UNA sola alarma que grita, y el MISMO
+                 contrato de datos (Puente.estado()).
+     cambia   -> alli papel topografico, ocre y musgo, y el VTEC como
+                 lamparita porque entra y sale en cada cuesta. Aqui negro
+                 azulado, escuadra mecanizada, y el VTEC ES un
+                 ACONTECIMIENTO: engancha a 5.850 con el pedal en el suelo,
+                 una vez por marcha, y se le deja gritar.
+
+   RESPONSIVE DE VERDAD: ni una sola medida de maqueta en pixeles. Toda la
+   escala cuelga de una raiz fluida unica, sin puntos de corte para el
+   tamano de letra:
+       html{font-size: calc(1.4px + .35vh + .25vw)}
+       1280x480 -> 6.28px   1024x600 -> 6.06px   800x480 -> 5.08px
+   El sumando fijo de 1.4px es el SUELO DE LEGIBILIDAD (subido desde .8px:
+   a 800x480 la metadata caia a 6,9 px y "pasar contraste" no es lo mismo
+   que leerse a un brazo en un carro que se mueve).
+   Las unicas medidas absolutas del fichero son las que la accesibilidad
+   EXIGE que no escalen: 44px de blanco tactil y los filetes de 1px.
+
+   MOVIMIENTO: una sola animacion, de OPACIDAD (se resuelve en el
+   compositor, no repinta capa), FINITA —tres destellos y se queda fija—
+   y con salida por prefers-reduced-motion. Un tablero que parpadea para
+   siempre acaba tapado con cinta, y en visión periferica a 200 km/h tira
+   del ojo fuera de la carretera.
+   ========================================================================== */
+
+:root{
+  /* --- oscuridad azulada. Nunca #000: mancha en OLED y al sol empeora --- */
+  --ink0:#0A0F14;      /* pagina                                */
+  --ink1:#0F161D;      /* panel                                 */
+  --ink2:#131C25;      /* casilla                               */
+  --ink3:#25191C;      /* casilla de alarma (calida y OSCURA:
+                          el rojo salta mas sobre fondo oscuro)  */
+  --void:#070B10;      /* hueco muerto: carril del tacometro     */
+  --line:#1D2830;      /* filete                                */
+  --line2:#2C3B45;     /* filete vivo                           */
+
+  /* --- tinta: tres pesos, medidos sobre --ink1 --- */
+  --bone:#E8F1F7;      /* 15.9:1 */
+  --steel:#AFC3D0;     /* 10.0:1 */
+  --mute:#879EAE;      /*  7.1:1 */
+
+  /* --- EL acento. Solo en dos sitios: el tramo del tacometro por encima
+         del umbral de VTEC, y el propio bloque de VTEC. En ningun otro
+         sitio de la pantalla hay verde, y por eso cuando engancha, grita. */
+  --neon:#A6FF2E;      /* 14.8:1 sobre panel */
+  --neon-d:#6FBF17;
+
+  /* --- avisos. Ambar = "cambia ya". Rojo = "algo va mal". Nada mas.  --- */
+  --amber:#FFB43C;     /* 10.3:1 */
+  --red:#FF6A55;       /*  6.4:1 sobre panel · 6.0:1 sobre la alarma */
+
+  --mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,"Roboto Mono","Liberation Mono",monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+html{
+  font-size:calc(1.4px + .35vh + .25vw);   /* la raiz fluida: TODO cuelga de aqui */
+  height:100%;
+}
+
+body{
+  height:100%;
+  overflow:hidden;                 /* sin scroll en ningun tamano */
+  background:var(--ink0);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1;  /* cifras tabulares en TODO el tablero */
+  color:var(--bone);
+  -webkit-font-smoothing:antialiased;
+  -webkit-text-size-adjust:100%;
+  -webkit-tap-highlight-color:transparent;
+}
+
+/* Papel milimetrado. Alfa deliberadamente por debajo del umbral de
+   percepcion sobre el panel: solo asoma por las juntas y el marco. Si se
+   viera, seria rejilla de sintetizador ochentero y sobraria. */
+.dash{
+  height:100%;width:100%;
+  padding:1.6rem;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  background-color:var(--ink0);
+  background-image:
+    repeating-linear-gradient(0deg,rgba(150,190,215,.07) 0 1px,transparent 1px 40px),
+    repeating-linear-gradient(90deg,rgba(150,190,215,.07) 0 1px,transparent 1px 40px);
+}
+
+/* ============================ CABECERA ============================ */
+.top{
+  flex:0 0 auto;min-height:50px;          /* 50px fijos: dentro va blanco tactil */
+  display:flex;align-items:center;
+  padding:0 1.5rem;
+  background:var(--ink1);
+  border:1px solid var(--line);
+  box-shadow:inset 0 1px 0 rgba(232,241,247,.04);
+}
+.brand{display:flex;align-items:center;flex:0 0 auto}
+.brand .mk{width:3.8rem;height:3.8rem;margin-right:1.1rem;color:var(--steel);flex:0 0 auto}
+.brand .mk svg{display:block;width:100%;height:100%;fill:none;stroke:currentColor;
+               stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round}
+.brand .wm{font-size:3.6rem;font-weight:700;letter-spacing:.22em;line-height:1;white-space:nowrap}
+.brand .tg{font-family:var(--mono);font-size:1.85rem;letter-spacing:.14em;color:var(--mute);
+           margin-top:.35rem;white-space:nowrap;text-transform:uppercase}
+
+.vr{width:1px;align-self:stretch;background:var(--line);margin:0 1.2rem;flex:0 0 auto}
+.grow{flex:1 1 auto;min-width:0;height:0;border-top:1px solid var(--line);margin:0 1rem}
+
+.hblk{display:flex;align-items:baseline;flex:0 0 auto;white-space:nowrap}
+/* RED DE SEGURIDAD (injerto del HUD): el enlace es el dato menos urgente de
+   la fila, asi que es el UNICO que se deja encoger y recortar. Antes de esto,
+   a 800x480 empujaba el boton de averias fuera del panel y se comia su
+   blanco tactil. Ahora cede el, y los 44px de dedo quedan intactos siempre. */
+.hblk.link{flex:0 1 auto;min-width:0;overflow:hidden}
+.hblk.link .mono{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.hblk .k{margin-right:.9rem}
+.hblk .mono{font-family:var(--mono);font-size:1.9rem;letter-spacing:.06em;color:var(--steel)}
+.hblk .mono b{color:var(--bone);font-weight:700}
+
+/* etiqueta minuscula: el idioma comun de los dos hermanos */
+.k{font-size:1.9rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+   color:var(--mute);line-height:1;white-space:nowrap}
+
+/* Puntos de enlace CON NOMBRE. Un punto sin etiqueta es adorno; con
+   etiqueta es informacion: si muere el receptor de las llantas, las cuatro
+   presiones se congelan en el ultimo valor bueno y siguen pareciendo
+   correctas. El punto hueco es lo unico que lo delata. */
+.pips{display:flex;align-items:center;flex:0 0 auto;gap:1.2rem}
+.pp{display:flex;align-items:center;white-space:nowrap}
+.pp .d{width:.85rem;height:.85rem;background:var(--steel);margin-right:.55rem;flex:0 0 auto}
+.pp.hollow .d{background:transparent;box-shadow:inset 0 0 0 1px var(--mute)}
+.pp .n{font-family:var(--mono);font-size:1.85rem;letter-spacing:.08em;color:var(--mute);
+       text-transform:uppercase}
+
+/* Testigo de averia. APAGADO = gris y hueco. Nunca verde: un testigo
+   apagado no es una buena noticia que celebrar, es la ausencia de una mala. */
+.mil{display:flex;align-items:center;flex:0 0 auto;color:var(--mute)}
+.mil svg{width:2.8rem;height:2.8rem;fill:none;stroke:currentColor;stroke-width:1.25;
+         stroke-linejoin:round;display:block;margin-right:.75rem;opacity:.6}
+.mil .t{font-size:1.9rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase}
+.mil .t b{color:var(--steel)}
+.mil.on{color:var(--amber)}
+.mil.on svg{opacity:1}
+
+/* UNICO elemento tactil del tablero: 44x44 reales, sin hover, con :active */
+.btn{
+  flex:0 0 auto;margin-left:1.3rem;
+  min-height:44px;min-width:44px;padding:0 1.4rem;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--ink2);border:1px solid var(--line2);
+  font-size:1.95rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--steel);white-space:nowrap;
+  -webkit-user-select:none;user-select:none;
+}
+.btn b{color:var(--bone);margin-left:.7rem;font-weight:700}
+.btn:active{background:rgba(232,241,247,.12);border-color:var(--steel);color:var(--bone)}
+
+/* ============================ REJILLA ============================ */
+.grid{
+  flex:1 1 auto;min-height:0;
+  margin-top:1.2rem;
+  display:grid;
+  grid-template-columns:39fr 31fr 30fr;
+  grid-template-rows:1.02fr 1fr;     /* el heroe manda, pero solo lo justo */
+  grid-gap:1.2rem;gap:1.2rem;
+}
+.p-tach {grid-column:1 / 3;grid-row:1}
+.p-wheel{grid-column:3;grid-row:1 / 3}
+.p-eng  {grid-column:1;grid-row:2}
+.p-pow  {grid-column:2;grid-row:2}
+
+.card{
+  min-width:0;min-height:0;overflow:hidden;position:relative;
+  background:var(--ink1);
+  border:1px solid var(--line);
+  padding:1.2rem 1.4rem;
+  display:flex;flex-direction:column;
+  box-shadow:inset 0 1px 0 rgba(232,241,247,.035);
+}
+/* Escuadra mecanizada: la firma de panel de esta familia. En el Element era
+   la esquina doblada de una hoja de mapa; aqui es una pieza rectificada. */
+.card::after{
+  content:"";position:absolute;right:0;top:0;width:1.4rem;height:1.4rem;
+  border-right:1px solid var(--line2);border-top:1px solid var(--line2);opacity:.7;
+}
+
+/* ---------- rotulo de region (idioma comun con el Element) ---------- */
+.rl{display:flex;align-items:center;flex:0 0 auto;min-width:0;
+    padding-bottom:.85rem;border-bottom:1px solid var(--line);margin-bottom:.95rem}
+.rl .ico{width:2.4rem;height:2.4rem;flex:0 0 auto;margin-right:.95rem;color:var(--steel)}
+.rl .ico svg{display:block;width:100%;height:100%;fill:none;stroke:currentColor;
+             stroke-width:1.35;stroke-linecap:round;stroke-linejoin:round}
+.rl .nm{font-size:2.1rem;font-weight:700;letter-spacing:.2em;text-transform:uppercase;
+        white-space:nowrap;color:var(--bone);flex:0 0 auto}
+/* la mitad subordinada del rotulo es la VICTIMA DESIGNADA: si el panel se
+   estrecha por debajo de lo medido, cede ella y nunca un valor */
+.rl .sub{font-family:var(--mono);font-size:1.85rem;letter-spacing:.08em;color:var(--mute);
+         margin-left:1rem;white-space:nowrap;text-transform:uppercase;
+         flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.rl .ld{flex:1 1 auto;min-width:.6rem;height:0;border-top:1px solid var(--line);margin:0 1.1rem}
+.rl .mt{font-family:var(--mono);font-size:1.85rem;letter-spacing:.05em;color:var(--mute);
+        white-space:nowrap;flex:0 0 auto}
+
+/* ======================= TACOMETRO (el heroe) ======================= */
+.hero{flex:2.5 1 auto;min-height:0;display:flex;align-items:center}
+
+/* REGIMEN Y VELOCIDAD, PEGADOS (injerto del HUD).
+   En la propuesta de origen habia 584 px entre "6850" y "112": dos
+   fijaciones para leer lo unico que se mira a 200 km/h. Aqui comparten
+   linea de base y los separa un filete: una sola barrida del ojo. */
+.rpm{flex:0 0 auto;display:flex;align-items:baseline}
+.rpm .n{font-size:12.6rem;font-weight:700;line-height:.8;letter-spacing:-.04em;color:var(--bone);
+        display:inline-block;min-width:2.35em;text-align:right}
+.rpm .u{font-size:2.1rem;font-weight:700;letter-spacing:.18em;color:var(--steel);margin-left:.6rem}
+
+.hv{flex:0 0 auto;width:1px;align-self:stretch;background:var(--line2);
+    margin:0 1.5rem;opacity:.8}
+
+.spdblk{flex:0 0 auto;display:flex;flex-direction:column;justify-content:center}
+.spd{display:flex;align-items:baseline}
+.spd .n{font-size:7.6rem;font-weight:700;line-height:.85;letter-spacing:-.035em;color:var(--bone);
+        display:inline-block;min-width:1.78em;text-align:right}
+.spd .u{font-size:1.95rem;font-weight:700;letter-spacing:.15em;color:var(--steel);margin-left:.5rem}
+.load{display:flex;align-items:baseline;margin-top:.75rem}
+.load .k{margin-right:.8rem}
+.load .v{font-size:2.7rem;font-weight:700;line-height:1;color:var(--steel);white-space:nowrap}
+.load .v i{font-size:1.75rem;font-style:normal;font-weight:600;color:var(--mute);margin-left:.3rem}
+
+/* --- VTEC ---------------------------------------------------------------
+   EL ACONTECIMIENTO. Injerto del Reactor: banda ANCHA como portador (una
+   insignia pequena no sostiene un acontecimiento) pero con el verde
+   EXCLUSIVO de esta casa, no con el naranja ambiental que ahogaba la
+   alarma del Reactor. Se lleva todo el ancho que sobra del heroe y todo su
+   alto. No mueve nada de sitio, no tapa ninguna cifra, y el resplandor vive
+   en una capa aparte, jamas debajo de un numero.
+   Sigue siendo DEDUCIDO —ningun OBD generico expone el solenoide— y lo dice.
+   ------------------------------------------------------------------------ */
+.vtec{
+  flex:1 1 auto;min-width:0;margin-left:1.8rem;position:relative;
+  display:flex;align-items:center;
+  padding:1rem 1.5rem;
+  border:1px dashed var(--line2);background:rgba(0,0,0,.25);
+}
+.vtec .bolt{width:2.8rem;height:2.8rem;flex:0 0 auto;margin-right:1rem;color:var(--line2)}
+.vtec .bolt svg{display:block;width:100%;height:100%;fill:currentColor}
+.vtec .w{font-size:4.6rem;font-weight:700;letter-spacing:.15em;line-height:1;color:var(--mute);flex:0 0 auto}
+.vtec .txt{margin-left:1.4rem;display:flex;flex-direction:column;justify-content:center;min-width:0}
+.vtec .st{font-size:2.5rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+          color:var(--mute);line-height:1.1;white-space:nowrap}
+.vtec .dc{font-family:var(--mono);font-size:1.85rem;letter-spacing:.08em;color:var(--mute);
+          margin-top:.5rem;white-space:nowrap;text-transform:uppercase;
+          overflow:hidden;text-overflow:ellipsis}
+/* Estado del shift light (injerto del Reactor): dice que la siguiente
+   alarma esta ARMADA y a que regimen, sin encender nada. */
+.vtec .arm{margin-left:auto;padding-left:1.4rem;display:flex;flex-direction:column;
+           align-items:flex-end;flex:0 0 auto;text-align:right}
+.vtec .arm .a1{font-size:1.9rem;font-weight:700;letter-spacing:.13em;color:var(--mute);
+               text-transform:uppercase;white-space:nowrap}
+.vtec .arm .a2{font-size:2.1rem;font-weight:700;letter-spacing:.13em;color:var(--mute);
+               text-transform:uppercase;white-space:nowrap;margin-top:.5rem}
+
+.vtec.on{
+  border:1px solid var(--neon);
+  background-color:rgba(166,255,46,.10);
+  background-image:repeating-linear-gradient(135deg,
+        rgba(166,255,46,.07) 0 1px,transparent 1px 7px);
+  box-shadow:inset .55rem 0 0 var(--neon);
+}
+.vtec.on .bolt{color:var(--neon)}
+.vtec.on .w  {color:var(--neon)}
+.vtec.on .st {color:var(--bone)}
+.vtec.on .dc {color:var(--steel)}
+.vtec.on .arm .a1{color:var(--steel)}
+.vtec.on .arm .a2{color:var(--amber)}
+
+/* El destello. Capa APARTE, encima del borde y por debajo de nada:
+   se anima OPACIDAD (compositor, sin repintar) y no box-shadow. Tres
+   destellos y se queda fija — injerto literal del Reactor, que es la
+   correccion que el autor del ganador pedia para su propio latido eterno. */
+.vtec .glow{position:absolute;left:-1px;top:-1px;right:-1px;bottom:-1px;
+            pointer-events:none;opacity:0;
+            box-shadow:0 0 2.4rem rgba(166,255,46,.42),inset 0 0 1.2rem rgba(166,255,46,.16)}
+.vtec.on .glow{animation:destello 1.05s ease-out 3 both}
+@keyframes destello{0%{opacity:1}100%{opacity:0}}
+/* Salida de emergencia (injerto del HUD). El aviso esta COMPLETO sin la
+   animacion: borde neon, liston interior, VTEC en verde y "ENGANCHADO" en
+   hueso sostienen el mensaje solos. El destello suma, nunca sostiene. */
+@media (prefers-reduced-motion:reduce){
+  .vtec.on .glow{animation:none;opacity:0}
+  .tc.alarm{animation:none}
+}
+
+/* --- la regla de revoluciones ------------------------------------------
+   Barra, no esfera: a 200 km/h el ojo compara longitudes mucho mas rapido
+   que angulos, y una regla horizontal deja grabar las zonas encima con
+   letra recta (VTEC / SHIFT / CORTE) sin que se pisen.  */
+.scale{flex:1 1 auto;min-height:0;margin-top:1rem;display:flex;flex-direction:column}
+
+.marks{flex:0 0 auto;position:relative;height:2.1rem}
+.marks span{position:absolute;bottom:.2rem;font-family:var(--mono);font-size:1.85rem;
+            letter-spacing:.08em;white-space:nowrap;text-transform:uppercase;font-weight:700}
+.marks .m-vtec {color:var(--neon);transform:translateX(-50%)}
+.marks .pin{width:.9rem;height:.7rem;margin-right:.45rem;vertical-align:baseline}
+.marks .m-shift{color:var(--amber);transform:translateX(-50%)}
+.marks .m-cut  {right:0;color:var(--red)}
+
+.bar{flex:1 1 auto;min-height:3rem;position:relative;
+     background:var(--void);border:1px solid var(--line)}
+/* Relleno frio hasta el umbral de VTEC. Deliberadamente APAGADO (3.1:1
+   sobre el carril, informativo pero sordo): ocupa dos tercios de la regla,
+   y si va brillante se convierte en la mancha mas clara de la pantalla y le
+   roba el golpe de vista al neon y a la aguja. El ojo iria al sitio
+   equivocado — que es exactamente lo que hacia el degradado metalico. */
+.bar .f-cold {position:absolute;top:0;bottom:0;left:0;
+              background:linear-gradient(180deg,#3B505E 0%,#1E2B33 100%)}
+/* Y AQUI, solo aqui, el neon: el trozo de vuelta que se esta corriendo con
+   las levas grandes. Es el unico relleno de color del tablero. */
+.bar .f-hot  {position:absolute;top:0;bottom:0;
+              background:linear-gradient(180deg,#C4FF6B 0%,#6FBF17 100%)}
+.bar .z-amber{position:absolute;top:0;bottom:0;
+              background:rgba(255,180,60,.20);border-left:1px solid rgba(255,180,60,.9)}
+.bar .z-red  {position:absolute;top:0;bottom:0;right:0;
+              background:rgba(255,106,85,.26);border-left:1px solid var(--red)}
+/* trama del carril: un segmento cada 250 rpm, que SE PUEDEN CONTAR */
+.bar .tk{position:absolute;top:0;bottom:0;left:0;right:0;
+  background-image:repeating-linear-gradient(90deg,rgba(10,15,20,.55) 0 1px,transparent 1px 2.7778%)}
+.bar .tk5{position:absolute;top:0;bottom:0;left:0;right:0;
+  background-image:repeating-linear-gradient(90deg,rgba(10,15,20,.85) 0 1px,transparent 1px 11.111%)}
+/* umbral de VTEC grabado en la propia regla */
+.bar .thr{position:absolute;top:-.5rem;bottom:-.5rem;width:1px;background:var(--neon);opacity:.85}
+/* LA AGUJA. Nucleo blanco duro de 2px: es la lectura de "donde estoy AHORA
+   MISMO" y sobrevive a estados que la maqueta no ha visto — a ralenti, con
+   el cuerpo de la barra casi vacio, la aguja se sigue leyendo sola. */
+.bar .edge{position:absolute;top:-.6rem;bottom:-.6rem;width:2px;
+           background:var(--bone);box-shadow:0 0 .45rem rgba(232,241,247,.5)}
+
+.nums{flex:0 0 auto;position:relative;height:2.1rem;margin-top:.35rem}
+.nums span{position:absolute;top:0;font-family:var(--mono);font-size:1.85rem;
+           color:var(--mute);transform:translateX(-50%)}
+.nums .hi{color:var(--steel);font-weight:700}
+
+/* ============================ MOTOR ============================ */
+.eg{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:1fr 1fr 1fr;
+    grid-template-rows:1fr 1fr;grid-gap:.3rem 1.3rem;gap:.3rem 1.3rem}
+.cell{display:flex;flex-direction:column;justify-content:center;min-width:0;
+      border-bottom:1px solid rgba(44,59,69,.35);padding-bottom:.3rem}
+.cell .v{font-size:3.8rem;font-weight:700;line-height:1;letter-spacing:-.025em;
+         color:var(--bone);white-space:nowrap;margin-top:.5rem}
+.cell .v i{font-size:1.9rem;font-style:normal;font-weight:600;letter-spacing:.04em;
+           color:var(--steel);margin-left:.35rem}
+
+/* DATO RANCIO: mas de 3 s sin volver por la K-line. Se apaga y escribe "--".
+   Nunca un 0, que a 6.850 rpm querria decir "pie levantado" y seria una
+   mentira peligrosa. Regla de familia, heredada del Element.
+   El contraste NO se baja para decir "apagado": lo apagado se dice con el
+   color y con el "--". Aqui el gris sigue a 7,5:1 sobre el rebaje. */
+.cell.stale{border-bottom-color:transparent;
+            background:rgba(0,0,0,.34);
+            box-shadow:inset 2px 0 0 var(--line2);
+            padding-left:.8rem;margin-left:-.8rem}
+.cell.stale .v{color:var(--mute);letter-spacing:.1em;font-size:3.4rem;
+               display:flex;align-items:center}
+/* la marca de rancio viaja con el "--", no con el rotulo: en la columna
+   estrecha de 800x480 el rotulo ya no tiene sitio y la marca se recortaba */
+.cell .old{font-family:var(--mono);font-size:1.85rem;font-weight:700;letter-spacing:.03em;
+           color:var(--mute);border:1px dotted var(--line2);padding:.2rem .5rem;
+           margin-left:.8rem;text-transform:uppercase;white-space:nowrap;line-height:1}
+.cell .old .ow{margin-right:.5rem}
+
+/* ---- MEZCLA: el recinto de lo que NO SE PUEDE MEDIR --------------------
+   Este carro lleva sonda de banda ESTRECHA y su mapa de PIDs se corta en
+   0x20: el 0134 no existe. La esfera se dibuja MUERTA —arco fantasma, sin
+   aguja, sin zonas, "--"— para que se vea que el instrumento existe y no
+   tiene senal. Quien manda es la fila de ajustes de combustible, que si es
+   real. Poner un 14.7 por defecto seria inventarse el dato mas caro del
+   motor. INJERTO DEL REACTOR: el motivo va DENTRO del dibujo (escala con
+   el SVG) en vez de en una franja flotante que a 800x480 caia a 6,9 px.  */
+.mix{flex:0 0 auto;margin-top:.8rem;position:relative;
+     border:1px dashed var(--line2);padding:1.5rem 1.2rem .6rem;
+     display:flex;align-items:center}
+.mix .tag{position:absolute;top:-.85rem;left:1.1rem;background:var(--ink1);padding:0 .55rem;
+          font-family:var(--mono);font-size:1.85rem;letter-spacing:.1em;color:var(--mute);
+          text-transform:uppercase;white-space:nowrap;
+          max-width:calc(100% - 2.2rem);overflow:hidden;text-overflow:ellipsis}
+.mix .dial{width:8.8rem;height:4.4rem;flex:0 0 auto;margin-right:1.2rem}
+.mix .dial svg{display:block;width:100%;height:100%}
+.mix .dial .arc{fill:none;stroke:var(--line2);stroke-width:7;opacity:.8;
+                stroke-dasharray:5 6;stroke-linecap:butt}
+.mix .dial .dead{fill:var(--mute);font-family:var(--mono);font-weight:700;
+                 text-anchor:middle;font-size:26px;letter-spacing:5px}
+.mix .lbl{display:flex;flex-direction:column;min-width:0;margin-right:auto}
+.mix .lbl .s{font-family:var(--mono);font-size:1.85rem;letter-spacing:.06em;color:var(--mute);
+             margin-top:.5rem;text-transform:uppercase;white-space:nowrap;
+             overflow:hidden;text-overflow:ellipsis}
+.mix .trim{font-size:4.6rem;font-weight:700;line-height:1;letter-spacing:-.02em;
+           color:var(--bone);white-space:nowrap;margin-left:1.1rem}
+.mix .trim i{font-size:2rem;font-style:normal;font-weight:600;color:var(--steel);margin-left:.3rem}
+
+/* ============================ LITIO + SERVICIO ============================ */
+.pw{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.pw>.half{flex:2.1 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:center}
+.pwtop{display:flex;align-items:flex-end}
+.pwtop .big{font-size:6rem;font-weight:700;line-height:.82;letter-spacing:-.035em;color:var(--bone)}
+.pwtop .big i{font-size:2.2rem;font-style:normal;font-weight:600;color:var(--steel);margin-left:.4rem}
+.pwtop .side{margin-left:auto;text-align:right;min-width:0}
+.pwtop .side .v{font-size:3rem;font-weight:700;line-height:1;color:var(--bone);
+                margin-top:.5rem;white-space:nowrap}
+.pwtop .side .v i{font-size:1.8rem;font-style:normal;font-weight:600;color:var(--steel);margin-left:.3rem}
+
+.meter{position:relative;height:1.5rem;background:var(--void);border:1px solid var(--line);margin-top:.95rem}
+.meter .fill{position:absolute;top:0;left:0;bottom:0;background:linear-gradient(180deg,#9FB8C9,#4E6473)}
+.meter .tk{position:absolute;top:0;left:0;right:0;bottom:0;
+  background-image:repeating-linear-gradient(90deg,rgba(10,15,20,.7) 0 1px,transparent 1px 10%)}
+
+.duo{display:grid;grid-template-columns:1fr 1fr;grid-gap:0 1.3rem;gap:0 1.3rem;margin-top:.65rem}
+.duo .v{font-size:2.9rem;font-weight:700;line-height:1;color:var(--bone);margin-top:.5rem;white-space:nowrap}
+.duo .v i{font-size:1.75rem;font-style:normal;font-weight:600;color:var(--steel);margin-left:.3rem}
+
+/* SERVICIO (injerto del Reactor): todo lo que NO se mira en movimiento en un
+   solo bloque de baja prioridad que el ojo pueda saltarse ENTERO. Antes
+   estaba disperso —la radio en la cabecera, el aceite dentro del panel de
+   litio— y eso obliga a barrer la pantalla para reunirlo. */
+.svc{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:center;
+     border-top:1px solid var(--line);margin-top:.75rem;padding-top:.7rem}
+.svchd{display:flex;align-items:center;flex:0 0 auto}
+.svchd .ico{width:1.9rem;height:1.9rem;margin-right:.7rem;color:var(--mute);flex:0 0 auto}
+.svchd .ico svg{display:block;width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.4}
+.svchd .ld{flex:1 1 auto;min-width:.6rem;height:0;border-top:1px solid var(--line);margin-left:1rem}
+.svcrow{display:grid;grid-template-columns:1fr 1fr 1fr;grid-gap:0 1.2rem;gap:0 1.2rem;margin-top:.6rem}
+.svcrow .v{font-size:2.75rem;font-weight:700;line-height:1;color:var(--steel);
+           margin-top:.45rem;white-space:nowrap}
+.svcrow .v i{font-size:1.75rem;font-style:normal;font-weight:600;color:var(--mute);margin-left:.28rem}
+
+/* ============================ LLANTAS ============================ */
+/* El eco de la alarma en la cabecera de la region: para que la unica cosa
+   que grita se ENCUENTRE sin barrer la pantalla. */
+.chip-al{display:flex;align-items:center;flex:0 0 auto;
+  font-size:1.85rem;font-weight:700;letter-spacing:.13em;color:var(--red);
+  text-transform:uppercase;white-space:nowrap}
+.chip-al .d{width:.9rem;height:.9rem;background:var(--red);margin-right:.65rem;flex:0 0 auto}
+
+.tg{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:1fr 1fr;
+    grid-template-rows:1fr 1fr;grid-gap:.95rem;gap:.95rem}
+.tc{position:relative;min-width:0;overflow:hidden;
+    background:var(--ink2);border:1px solid var(--line);
+    padding:.85rem 1.05rem;display:flex;flex-direction:column}
+.tchd{flex:0 0 auto;display:flex;align-items:center}
+.tchd .pos{font-size:2.4rem;font-weight:700;letter-spacing:.2em;color:var(--steel);line-height:1}
+.tchd .plan{margin-left:auto;width:2.2rem;height:3.2rem;color:var(--steel);flex:0 0 auto}
+.tchd .plan svg{display:block;width:100%;height:100%}
+/* el bloque de cifras se centra en el hueco que quede: esta columna ocupa
+   las dos filas y su alto cambia mucho entre los tres tamanos */
+.tcb{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;min-height:0}
+/* La presion es la segunda cifra mas grande del tablero: es el unico dato
+   que puede acabar en el arcen. La temperatura va un peso por debajo. */
+.tc .psi{font-size:8.2rem;font-weight:700;line-height:.85;letter-spacing:-.035em;
+         color:var(--bone);white-space:nowrap}
+.tc .psi i{font-size:2rem;font-style:normal;font-weight:700;letter-spacing:.1em;
+           color:var(--steel);margin-left:.35rem}
+/* Injerto del HUD: temperatura y bandera en UNA sola linea. Aprieta la
+   casilla de la alarma, que antes quedaba ~40 % vacia a 1024x600. */
+.tmprow{display:flex;align-items:baseline;margin-top:.65rem;min-width:0}
+.tc .tmp{font-size:3.1rem;font-weight:700;line-height:1;color:var(--steel);white-space:nowrap}
+.tc .tmp i{font-size:1.75rem;font-style:normal;font-weight:600;color:var(--mute);margin-left:.3rem}
+
+/* LA UNICA QUE GRITA. Si gritasen las cuatro, no gritaria ninguna.
+   Seis canales a la vez, no solo el color: fondo calido oscuro, borde rojo,
+   liston interior de .45rem, la cifra en rojo y al mayor tamano de su
+   columna, la bandera con triangulo, y el eco en el rotulo de la region. */
+.tc.alarm{border-color:var(--red);background:var(--ink3);
+          box-shadow:inset .45rem 0 0 var(--red)}
+.tc.alarm .pos,.tc.alarm .psi,.tc.alarm .psi i,.tc.alarm .plan{color:var(--red)}
+.tc.alarm .tmp{color:var(--steel)}
+.flag{display:flex;align-items:center;flex:0 0 auto;margin-right:.9rem;
+      font-size:1.9rem;font-weight:700;letter-spacing:.12em;color:var(--red);
+      text-transform:uppercase;white-space:nowrap}
+.flag svg{width:1.9rem;height:1.9rem;margin-right:.55rem;flex:0 0 auto;
+          fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:round}
+.flag .sep{color:var(--line2);margin-left:.7rem;font-weight:400}
+
+/* ================= AJUSTES POR PROPORCION, NO POR ANCHO =================
+   Injerto del Reactor. A 2,67:1 (la barra del radio) la regla horizontal
+   manda y las cifras se quedan como estan. En una pantalla mas cuadrada Y
+   ALTA —1024x600— sobra alto: en vez de dejarlo en aire, se devuelve
+   agrandando las cifras que de verdad se agradecen a 200 km/h. La condicion
+   de min-height deja fuera a 800x480, que es cuadrada pero NO tiene alto. */
+@media (max-aspect-ratio:2/1) and (min-height:520px){
+  .rpm .n{font-size:13.6rem}
+  .spd .n{font-size:8.2rem}
+  .tc .psi{font-size:9.6rem}
+  .tc .tmp{font-size:3.6rem}
+  .cell .v{font-size:4.6rem}
+  .pwtop .big{font-size:7rem}
+}
+
+/* ================= LA METADATA SOBRA, NO ENCOGE =================
+   Injerto del Reactor. Por debajo de 900 px de ancho, los rotulos mono de
+   metadata (K-LINE · 010C, PIDs 01-20, la MAC del BMS, CH340) caerian a
+   ~9 px. Pasar contraste no es lo mismo que leerse de un vistazo a un brazo
+   de distancia en un carro que se mueve: a ese tamano ESA metadata sobra.
+   Se va entera y sube el suelo de letra del tablero. Nunca se tira un VALOR:
+   solo metadata que no cambia y que ya esta en otro sitio o en la ficha. */
+/* La banda de VTEC es lo primero que se aprieta al estrechar el tacometro.
+   Orden de sacrificio, de menos a mas importante: primero la palabra
+   "armado" (el numero del shift sigue ahi y ademas esta grabado en la
+   regla), luego el bloque entero del shift. La linea "DEDUCIDO · RPM 5850
+   + CARGA" NO se toca jamas: es la honestidad del dato. */
+@media (max-width:1200px){ .vtec .arm .aw{display:none} }
+@media (max-width:1140px){
+  .vtec .arm{display:none}
+  .vtec{padding:1rem 1.1rem;margin-left:1.2rem}
+  .vtec .w{font-size:3.8rem}
+  .vtec .bolt{width:2.4rem;height:2.4rem;margin-right:.8rem}
+  .vtec .txt{margin-left:1rem}
+}
+/* El umbral de VTEC esta grabado en la propia regla, dos centimetros mas
+   abajo y en el mismo verde. Si el panel se estrecha, el numero se va de
+   la linea de honestidad —nunca la palabra DEDUCIDO, que es el aviso. */
+@media (max-width:940px){ .vtec .dc .dn{display:none} }
+
+@media (max-width:900px){
+  .rl .mt{display:none}
+  .rl .ld{margin-right:0}
+  .brand .tg{display:none}
+  /* los numeros de SHIFT y CORTE se solapaban a 800 px: sobreviven el
+     nombre de la zona, su color y la escala 0-9 de debajo, y ademas el
+     rotulo de la region ya dice "zona roja 8300 · corte 9000" */
+  .marks .mn{display:none}
+  /* del chip de rancio queda la EDAD, que es el dato; que no hay valor ya
+     lo dicen el "--", el rebaje oscuro y el gris */
+  .cell .old .ow{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="dash">
+
+  <!-- ========================= CABECERA ========================= -->
+  <header class="top">
+    <div class="brand">
+      <span class="mk" aria-hidden="true"><svg viewBox="0 0 24 24">
+        <path d="M3.2 18.4a9.6 9.6 0 1 1 17.6 0"/>
+        <path d="M12 16.6 17.9 8.6"/>
+        <path d="M19.6 6.4a12 12 0 0 1 1.5 2.4"/>
+      </svg></span>
+      <div>
+        <div class="wm">S2000</div>
+        <div class="tg">AP1 &middot; F20C &middot; 2.0 VTEC</div>
+      </div>
+    </div>
+
+    <span class="vr"></span>
+
+    <div class="hblk link">
+      <span class="mono">ISO 9141-2 &middot; <b id="hd-lect">6.7</b> lect/s</span>
+    </div>
+
+    <span class="grow"></span>
+
+    <!-- Puntos de enlace CON NOMBRE: un punto sin etiqueta es adorno -->
+    <div class="pips">
+      <span class="pp" id="pip-obd"><span class="d"></span><span class="n">OBD</span></span>
+      <span class="pp" id="pip-tpms"><span class="d"></span><span class="n">TPMS</span></span>
+      <span class="pp" id="pip-arr"><span class="d"></span><span class="n">BMS</span></span>
+    </div>
+
+    <span class="vr"></span>
+
+    <div class="mil" id="hd-mil-box" aria-label="Luz de averia">
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M1.6 11.6V7.8h1.7V6.1h2.2V4.3h3.6v1.8h1.6l3.7 2.6v2.9z"/>
+        <path d="M6.4 4.3V2.6h2.6"/>
+      </svg>
+      <span class="t" id="hd-mil">MIL apagada</span>
+    </div>
+
+    <div class="btn" id="btn-diag" role="button" tabindex="0">Aver&iacute;as <b id="hd-cod">0</b></div>
+  </header>
+
+  <!-- ========================= REJILLA ========================= -->
+  <div class="grid">
+
+    <!-- ------------------- TACOMETRO ------------------- -->
+    <section class="card p-tach">
+      <div class="rl">
+        <span class="ico" aria-hidden="true"><svg viewBox="0 0 16 16">
+          <path d="M2.2 12.4a6.6 6.6 0 1 1 11.6 0"/>
+          <path d="M8 11.4 12.2 6.1"/>
+          <circle cx="8" cy="12.2" r=".95" fill="currentColor" stroke="none"/>
+        </svg></span>
+        <span class="nm">Tac&oacute;metro</span>
+        <span class="sub">zona roja 8300 &middot; corte 9000</span>
+        <span class="ld"></span>
+        <span class="mt">K-LINE &middot; 010C</span>
+      </div>
+
+      <div class="hero">
+        <!-- Regimen y velocidad pegados: una sola fijacion del ojo -->
+        <div class="rpm"><span class="n" id="m-rpm">6850</span><span class="u">RPM</span></div>
+        <span class="hv"></span>
+        <div class="spdblk">
+          <div class="spd"><span class="n" id="m-vel">112</span><span class="u">KM/H</span></div>
+          <div class="load"><span class="k">Carga</span>
+            <span class="v"><span id="m-carga">88</span><i>%</i></span></div>
+        </div>
+
+        <!-- EL ACONTECIMIENTO -->
+        <div class="vtec on" id="vtec">
+          <span class="glow" aria-hidden="true"></span>
+          <span class="bolt" aria-hidden="true"><svg viewBox="0 0 16 16">
+            <path d="M9.1 1.2 3.1 9.4h3.6l-.9 5.4 6.2-8.4H8.4z"/>
+          </svg></span>
+          <span class="w">VTEC</span>
+          <span class="txt">
+            <span class="st" id="vtec-st">Enganchado</span>
+            <span class="dc">Deducido &middot; rpm<b class="dn"> 5850</b> + carga</span>
+          </span>
+          <span class="arm">
+            <span class="a1">Shift</span>
+            <span class="a2"><span id="shift-st">7500</span> <b class="aw">armado</b></span>
+          </span>
+        </div>
+      </div>
+
+      <!-- ---------- la regla de revoluciones ---------- -->
+      <div class="scale">
+        <div class="marks">
+          <span class="m-vtec" id="mk-vtec" style="left:65%"><svg class="pin" viewBox="0 0 8 6" aria-hidden="true"><path d="M4 6 0 0h8z" fill="currentColor"/></svg>VTEC 5850</span>
+          <span class="m-shift" id="mk-shift" style="left:83.333%">SHIFT<b class="mn"> 7500</b></span>
+          <span class="m-cut">CORTE<b class="mn"> 9000</b></span>
+        </div>
+        <div class="bar" id="tach" aria-label="6850 rpm de 9000">
+          <div class="f-cold" id="tach-cold" style="width:65%"></div>
+          <div class="f-hot" id="tach-hot" style="left:65%;width:11.111%"></div>
+          <div class="tk"></div>
+          <div class="tk5"></div>
+          <div class="z-amber" id="z-amber" style="left:83.333%;width:8.889%"></div>
+          <div class="z-red" id="z-red" style="left:92.222%"></div>
+          <div class="thr" id="tach-thr" style="left:65%"></div>
+          <div class="edge" id="tach-edge" style="left:76.111%"></div>
+        </div>
+        <div class="nums">
+          <span style="left:0%">0</span>
+          <span style="left:11.111%">1</span>
+          <span style="left:22.222%">2</span>
+          <span style="left:33.333%">3</span>
+          <span style="left:44.444%">4</span>
+          <span style="left:55.556%">5</span>
+          <span class="hi" style="left:66.667%">6</span>
+          <span class="hi" style="left:77.778%">7</span>
+          <span class="hi" style="left:88.889%">8</span>
+          <span class="hi" style="left:100%">9</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------- LLANTAS ------------------- -->
+    <section class="card p-wheel">
+      <div class="rl">
+        <span class="ico" aria-hidden="true"><svg viewBox="0 0 16 16">
+          <path d="M6.1 1.7h3.8l1.5 3.5.7 4.3-.5 4.8H4.4l-.5-4.8.7-4.3z"/>
+          <path d="M5.6 6.1h4.8"/>
+        </svg></span>
+        <span class="nm">Llantas</span>
+        <span class="sub">TPMS</span>
+        <span class="ld"></span>
+        <span class="chip-al" id="ll-aviso"><span class="d"></span><span id="ll-aviso-txt">TD baja</span></span>
+      </div>
+
+      <div class="tg">
+        <!-- delantera izquierda -->
+        <div class="tc" id="ll0">
+          <div class="tchd"><span class="pos">DI</span>
+            <span class="plan" aria-hidden="true"><svg viewBox="0 0 20 30">
+              <path d="M6.6 2.2h6.8l1.5 5v16.6l-1.5 4H6.6l-1.5-4V7.2z" fill="none" stroke="currentColor" stroke-width="1" opacity=".4"/>
+              <rect x="1.2" y="6.2" width="3" height="5" fill="currentColor"/>
+              <rect x="15.8" y="6.2" width="3" height="5" fill="currentColor" opacity=".2"/>
+              <rect x="1.2" y="19" width="3" height="5" fill="currentColor" opacity=".2"/>
+              <rect x="15.8" y="19" width="3" height="5" fill="currentColor" opacity=".2"/>
+            </svg></span>
+          </div>
+          <div class="tcb">
+            <div class="psi"><span id="ll0-psi">32</span><i>PSI</i></div>
+            <div class="tmprow">
+              <span class="flag" id="ll0-flag" style="display:none"><svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 2.4 15 13.6H1z"/><path d="M8 6.6v3.4"/>
+                <circle cx="8" cy="11.9" r=".8" fill="currentColor" stroke="none"/>
+              </svg>Baja<span class="sep">&middot;</span></span>
+              <span class="tmp"><span id="ll0-t">28</span><i>&deg;C</i></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- delantera derecha -->
+        <div class="tc" id="ll1">
+          <div class="tchd"><span class="pos">DD</span>
+            <span class="plan" aria-hidden="true"><svg viewBox="0 0 20 30">
+              <path d="M6.6 2.2h6.8l1.5 5v16.6l-1.5 4H6.6l-1.5-4V7.2z" fill="none" stroke="currentColor" stroke-width="1" opacity=".4"/>
+              <rect x="1.2" y="6.2" width="3" height="5" fill="currentColor" opacity=".2"/>
+              <rect x="15.8" y="6.2" width="3" height="5" fill="currentColor"/>
+              <rect x="1.2" y="19" width="3" height="5" fill="currentColor" opacity=".2"/>
+              <rect x="15.8" y="19" width="3" height="5" fill="currentColor" opacity=".2"/>
+            </svg></span>
+          </div>
+          <div class="tcb">
+            <div class="psi"><span id="ll1-psi">31</span><i>PSI</i></div>
+            <div class="tmprow">
+              <span class="flag" id="ll1-flag" style="display:none"><svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 2.4 15 13.6H1z"/><path d="M8 6.6v3.4"/>
+                <circle cx="8" cy="11.9" r=".8" fill="currentColor" stroke="none"/>
+              </svg>Baja<span class="sep">&middot;</span></span>
+              <span class="tmp"><span id="ll1-t">29</span><i>&deg;C</i></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- trasera izquierda -->
+        <div class="tc" id="ll2">
+          <div class="tchd"><span class="pos">TI</span>
+            <span class="plan" aria-hidden="true"><svg viewBox="0 0 20 30">
+              <path d="M6.6 2.2h6.8l1.5 5v16.6l-1.5 4H6.6l-1.5-4V7.2z" fill="none" stroke="currentColor" stroke-width="1" opacity=".4"/>
+              <rect x="1.2" y="6.2" width="3" height="5" fill="currentColor" opacity=".2"/>
+              <rect x="15.8" y="6.2" width="3" height="5" fill="currentColor" opacity=".2"/>
+              <rect x="1.2" y="19" width="3" height="5" fill="currentColor"/>
+              <rect x="15.8" y="19" width="3" height="5" fill="currentColor" opacity=".2"/>
+            </svg></span>
+          </div>
+          <div class="tcb">
+            <div class="psi"><span id="ll2-psi">30</span><i>PSI</i></div>
+            <div class="tmprow">
+              <span class="flag" id="ll2-flag" style="display:none"><svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 2.4 15 13.6H1z"/><path d="M8 6.6v3.4"/>
+                <circle cx="8" cy="11.9" r=".8" fill="currentColor" stroke="none"/>
+              </svg>Baja<span class="sep">&middot;</span></span>
+              <span class="tmp"><span id="ll2-t">27</span><i>&deg;C</i></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- trasera derecha — LA UNICA QUE GRITA -->
+        <div class="tc alarm" id="ll3">
+          <div class="tchd"><span class="pos">TD</span>
+            <span class="plan" aria-hidden="true"><svg viewBox="0 0 20 30">
+              <path d="M6.6 2.2h6.8l1.5 5v16.6l-1.5 4H6.6l-1.5-4V7.2z" fill="none" stroke="currentColor" stroke-width="1" opacity=".6"/>
+              <rect x="1.2" y="6.2" width="3" height="5" fill="currentColor" opacity=".25"/>
+              <rect x="15.8" y="6.2" width="3" height="5" fill="currentColor" opacity=".25"/>
+              <rect x="1.2" y="19" width="3" height="5" fill="currentColor" opacity=".25"/>
+              <rect x="15.8" y="19" width="3" height="5" fill="currentColor"/>
+            </svg></span>
+          </div>
+          <div class="tcb">
+            <div class="psi"><span id="ll3-psi">24</span><i>PSI</i></div>
+            <div class="tmprow">
+              <span class="flag" id="ll3-flag"><svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 2.4 15 13.6H1z"/><path d="M8 6.6v3.4"/>
+                <circle cx="8" cy="11.9" r=".8" fill="currentColor" stroke="none"/>
+              </svg>Baja<span class="sep">&middot;</span></span>
+              <span class="tmp"><span id="ll3-t">31</span><i>&deg;C</i></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------- MOTOR ------------------- -->
+    <section class="card p-eng">
+      <div class="rl">
+        <span class="ico" aria-hidden="true"><svg viewBox="0 0 16 16">
+          <path d="M4.3 2.2h7.4v4.9H4.3z"/>
+          <path d="M8 7.1v2.7"/>
+          <path d="M8 9.8 6.1 13.8M8 9.8l1.9 4"/>
+          <path d="M5.4 13.8h5.2"/>
+        </svg></span>
+        <span class="nm">Motor</span>
+        <span class="sub">F20C</span>
+        <span class="ld"></span>
+        <span class="mt">PIDs 01&ndash;20</span>
+      </div>
+
+      <div class="eg">
+        <div class="cell" id="c-agua"><span class="k">Agua</span>
+          <span class="v"><span id="m-agua">88</span><i>&deg;C</i></span></div>
+        <div class="cell" id="c-aire"><span class="k">Aire</span>
+          <span class="v"><span id="m-aire">34</span><i>&deg;C</i></span></div>
+        <div class="cell" id="c-alt"><span class="k">Alternador</span>
+          <span class="v"><span id="m-alt">14.1</span><i>V</i></span></div>
+
+        <div class="cell" id="c-map"><span class="k">Colector</span>
+          <span class="v"><span id="m-map">31</span><i>kPa</i></span></div>
+        <div class="cell" id="c-avance"><span class="k">Avance</span>
+          <span class="v"><span id="m-avance">18</span><i>&deg;</i></span></div>
+
+        <!-- DATO RANCIO: la K-line no lo devuelve desde hace mas de 3 s.
+             "--" y apagado, nunca un 0: a 6.850 rpm un 0 de mariposa
+             querria decir "pie levantado" y seria una mentira peligrosa. -->
+        <div class="cell stale" id="c-tps">
+          <span class="k">Mariposa</span>
+          <span class="v"><span id="m-tps">&ndash;&ndash;</span><span class="old"><b class="ow">sin dato</b><span>4,2 s</span></span></span>
+        </div>
+      </div>
+
+      <!-- MEZCLA: esfera muerta, ajustes al mando -->
+      <div class="mix">
+        <span class="tag">Sin PID 0134</span>
+        <span class="dial" aria-label="Reloj de mezcla sin senal">
+          <svg viewBox="2 8 96 70">
+            <path class="arc" d="M20.56 67 A34 34 0 1 1 79.44 67"/>
+            <text class="dead" id="afr-val" x="50" y="58">&ndash;&ndash;</text>
+          </svg>
+        </span>
+        <span class="lbl">
+          <span class="k">Mezcla &middot; ajustes</span>
+          <span class="s">banda estrecha &middot; corto + largo</span>
+        </span>
+        <span class="trim"><span id="m-trim">&minus;4</span><i>%</i></span>
+      </div>
+    </section>
+
+    <!-- ------------------- LITIO + SERVICIO ------------------- -->
+    <section class="card p-pow">
+      <div class="rl">
+        <span class="ico" aria-hidden="true"><svg viewBox="0 0 16 16">
+          <rect x="1.4" y="4.3" width="11" height="7.4" rx="1"/>
+          <path d="M14.2 6.7v2.6"/>
+          <path d="M7.6 5.9 5.6 8.6h2.1l-.4 2.2 2.3-3H7.4z" fill="currentColor" stroke="none"/>
+        </svg></span>
+        <span class="nm">Litio</span>
+        <span class="sub" id="arr-nom">BMS JBD</span>
+        <span class="ld"></span>
+        <span class="mt" id="arr-mac">1 banco</span>
+      </div>
+
+      <div class="pw">
+        <div class="half">
+          <div class="pwtop">
+            <span class="big"><span id="arr-soc">92</span><i>%</i></span>
+            <span class="side">
+              <span class="k">Tensi&oacute;n</span>
+              <div class="v"><span id="arr-v">13.4</span><i>V</i></div>
+            </span>
+          </div>
+          <div class="meter"><div class="fill" id="arr-bar" style="width:92%"></div><div class="tk"></div></div>
+          <div class="duo">
+            <div><span class="k">Potencia</span><div class="v"><span id="arr-w">+38</span><i>W</i></div></div>
+            <div><span class="k">Celdas</span><div class="v"><span id="arr-t">31</span><i>&deg;C</i></div></div>
+          </div>
+        </div>
+
+        <!-- lo que NO se mira en movimiento, todo junto y saltable -->
+        <div class="svc">
+          <div class="svchd">
+            <span class="ico" aria-hidden="true"><svg viewBox="0 0 16 16">
+              <path d="M8 2.1c2.6 3 4.4 5 4.4 7A4.4 4.4 0 0 1 8 13.5 4.4 4.4 0 0 1 3.6 9.1c0-2 1.8-4 4.4-7z"/>
+            </svg></span>
+            <span class="k">Servicio</span>
+            <span class="ld"></span>
+          </div>
+          <div class="svcrow">
+            <div><span class="k">Aceite</span>
+              <div class="v"><span id="ace-pct">62</span><i>%</i></div></div>
+            <div><span class="k">Faltan</span>
+              <div class="v"><span id="ace-km">2270</span><i>km</i></div></div>
+            <div><span class="k">Radio</span>
+              <div class="v"><span id="radio-t">68</span><i>&deg;C</i></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   S2000 — motor de actualizacion.
+
+   MISMO CONTRATO QUE EL HERMANO: los datos llegan del servicio por
+   Puente.estado(), que devuelve JSON. Se reutilizan tal cual los campos
+   del Element:
+     agua, aire, rpm, carga, avance, mapPsi, trim, afr, vtec,
+     ll0psi/ll0t/ll0baja ... ll3psi/ll3t/ll3baja,
+     arrSoc/arrV/arrW/arrT/arrNom/arrMac   (aqui: el banco de litio),
+     acePct/aceKm, radioC, codigos, mil,
+     okObd/okTpms/okArr.
+
+   CAMPOS NUEVOS DE ESTE SABOR (no existen en el Element, y por eso van
+   nombrados igual de claro y listados en la ficha):
+     velocidad   number  km/h            PID 010D
+     alternador  number  V               tension de barra con el motor en marcha
+     mariposa    number  %               PID 0111
+     edades      object  {campo: segundos desde la ultima lectura buena}
+     rpmMax / rpmVtec / rpmShift / rpmRoja / rpmCorte
+                 number  rpm             limites del F20C. Son propiedades del
+                                         motor, no telemetria: si el servicio no
+                                         los manda se usan los del AP1.
+
+   REGLA DURA HEREDADA: un valor ausente o rancio se pinta "--" y APAGADO.
+   Nunca un cero, nunca un valor por defecto: un 0 y un "no lo se"
+   significan cosas opuestas, y a 6.850 rpm la diferencia se paga cara.
+   ============================================================ */
+(function(){
+  var GUION = "––";
+
+  /* Limites del F20C del AP1. El servicio puede sobreescribirlos. */
+  var LIM = {max:9000, vtec:5850, shift:7500, roja:8300, corte:9000};
+
+  function el(id){ return document.getElementById(id); }
+
+  /* Separacion de miles con espacio FINO: un "2270" se lee peor que un
+     "2 270" de reojo, y la coma se confunde con el decimal. */
+  function miles(n){
+    var t = String(n), neg = t.charAt(0) === "-";
+    if(neg) t = t.slice(1);
+    if(t.length <= 3) return (neg ? "-" : "") + t;
+    return (neg ? "-" : "") + t.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  }
+
+  /* Si no hay valor tampoco hay unidad: un "-- °C" dice que la sonda mide
+     grados, y lo que hay que decir es que NO HAY MEDIDA. La unidad viaja
+     siempre en el <i> que sigue a la cifra, asi que se apaga con ella. */
+  function unidad(e, hay){
+    var u = e && e.nextElementSibling;
+    if(u && u.tagName === "I") u.style.display = hay ? "" : "none";
+  }
+
+  /* Sin separador de miles: un regimen se escribe 6850, no 6 850. */
+  function setLlano(id, v){
+    var e = el(id); if(!e) return;
+    if(v === null || v === undefined){
+      e.textContent = GUION; e.style.color = "var(--mute)"; unidad(e, false); return;
+    }
+    e.style.color = ""; e.textContent = String(v); unidad(e, true);
+  }
+
+  function set(id, v, dec){
+    var e = el(id); if(!e) return;
+    if(v === null || v === undefined){
+      e.textContent = GUION;
+      e.style.color = "var(--mute)";
+      unidad(e, false);
+      return;
+    }
+    e.style.color = ""; unidad(e, true);
+    if(typeof v === "number") e.textContent = (dec !== undefined) ? v.toFixed(dec) : miles(v);
+    else e.textContent = String(v);
+  }
+
+  /* Un dato es RANCIO si su marca de tiempo pasa de 3 s. La marca la pone
+     el firmware POR PID; el tablero no la inventa. Si el servicio no manda
+     "edades", ninguna casilla se apaga por su cuenta. */
+  function rancio(d, campo){
+    var e = d && d.edades;
+    if(!e) return null;
+    var s = e[campo];
+    return (typeof s === "number" && s > 3) ? s : null;
+  }
+
+  /* Pinta una casilla del motor respetando la regla del dato rancio. */
+  function casilla(cellId, valId, v, dec, edad){
+    var c = el(cellId), e = el(valId);
+    var chip = e && e.parentNode ? e.parentNode.querySelector(".old") : null;
+    if(edad !== null && edad !== undefined){
+      if(c) c.classList.add("stale");
+      set(valId, null);
+      /* el chip se fabrica si no estaba: la regla del dato rancio vale para
+         TODOS los campos, no solo para el que trae el boceto pintado */
+      if(!chip && e && e.parentNode){
+        chip = document.createElement("span");
+        chip.className = "old";
+        chip.innerHTML = '<b class="ow">sin dato</b><span></span>';
+        e.parentNode.appendChild(chip);
+      }
+      if(chip){
+        chip.style.display = "";
+        var sp = chip.querySelector("span");
+        if(sp) sp.textContent = edad.toFixed(1).replace(".", ",") + " s";
+      }
+      return;
+    }
+    if(c) c.classList.remove("stale");
+    if(chip) chip.style.display = "none";
+    set(valId, v, dec);
+  }
+
+  function pip(id, vivo){
+    var e = el(id); if(!e) return;
+    if(vivo === true) e.classList.remove("hollow"); else e.classList.add("hollow");
+  }
+
+  function pct(rpm){
+    if(rpm === null || rpm === undefined || !LIM.max) return null;
+    return Math.max(0, Math.min(100, rpm / LIM.max * 100));
+  }
+
+  /* La regla de revoluciones. Todo en PORCENTAJE del padre: no hay una sola
+     posicion en pixeles, asi que la escala es correcta a cualquier tamano. */
+  function tacometro(rpm){
+    var pV = pct(LIM.vtec), pS = pct(LIM.shift), pR = pct(LIM.roja), p = pct(rpm);
+    var cold = el("tach-cold"), hot = el("tach-hot"),
+        thr = el("tach-thr"), edge = el("tach-edge"),
+        za = el("z-amber"), zr = el("z-red");
+
+    if(thr) thr.style.left = pV + "%";
+    if(za){ za.style.left = pS + "%"; za.style.width = (pR - pS) + "%"; }
+    if(zr) zr.style.left = pR + "%";
+
+    var mv = el("mk-vtec"), ms = el("mk-shift");
+    if(mv){ mv.style.left = pV + "%"; mv.lastChild.nodeValue = "VTEC " + LIM.vtec; }
+    if(ms){
+      ms.style.left = pS + "%";
+      var mb = ms.querySelector(".mn");
+      if(mb) mb.textContent = " " + LIM.shift;
+    }
+
+    if(p === null){
+      /* sin regimen no se dibuja una barra a cero: se apaga entera */
+      if(cold) cold.style.width = "0%";
+      if(hot)  hot.style.width = "0%";
+      if(edge) edge.style.display = "none";
+      return;
+    }
+    if(edge){ edge.style.display = ""; edge.style.left = p + "%"; }
+    if(cold) cold.style.width = Math.min(p, pV) + "%";
+    if(hot){
+      hot.style.left = pV + "%";
+      hot.style.width = Math.max(0, p - pV) + "%";
+    }
+  }
+
+  var RUEDAS = ["DI", "DD", "TI", "TD"];
+
+  function llanta(i, psi, temp, baja){
+    set("ll" + i + "-psi", psi);
+    set("ll" + i + "-t", temp);
+    var c = el("ll" + i);
+    if(c){ if(baja) c.classList.add("alarm"); else c.classList.remove("alarm"); }
+    var f = el("ll" + i + "-flag");
+    if(f) f.style.display = baja ? "" : "none";
+  }
+
+  /* El eco de la cabecera nombra la PRIMERA rueda baja. Si no hay ninguna,
+     no se pinta: un aviso permanente es un aviso que se ignora. */
+  function avisoLlantas(bajas){
+    var chip = el("ll-aviso"), txt = el("ll-aviso-txt");
+    if(!chip) return;
+    if(!bajas.length){ chip.style.display = "none"; return; }
+    chip.style.display = "";
+    if(txt) txt.textContent = bajas.length === 1
+      ? (RUEDAS[bajas[0]] + " baja")
+      : (bajas.length + " llantas bajas");
+  }
+
+  /* El VTEC. Es DEDUCIDO de rpm + carga; ningun OBD generico expone el
+     solenoide, y el tablero lo dice en su propio recinto punteado.
+     Cuando engancha, la clase se quita y se vuelve a poner para que el
+     destello (tres y para) arranque de nuevo en cada enganche. */
+  var ultimoVtec = null;
+  function vtec(estado){
+    var v = el("vtec"), vs = el("vtec-st");
+    if(!v) return;
+    if(estado === true){
+      if(ultimoVtec !== true){
+        v.classList.remove("on");
+        void v.offsetWidth;          /* reinicia la animacion finita */
+        v.classList.add("on");
+      }
+      if(vs) vs.textContent = "Enganchado";
+    } else {
+      v.classList.remove("on");
+      if(vs) vs.textContent = (estado === false) ? "En reposo" : GUION;
+    }
+    ultimoVtec = (estado === true);
+  }
+
+  function pintar(d){
+    /* --- limites del motor, si el servicio los manda --- */
+    if(typeof d.rpmMax   === "number") LIM.max   = d.rpmMax;
+    if(typeof d.rpmVtec  === "number") LIM.vtec  = d.rpmVtec;
+    if(typeof d.rpmShift === "number") LIM.shift = d.rpmShift;
+    if(typeof d.rpmRoja  === "number") LIM.roja  = d.rpmRoja;
+    if(typeof d.rpmCorte === "number") LIM.corte = d.rpmCorte;
+    var sb = el("shift-st");
+    if(sb) sb.textContent = String(LIM.shift);
+    var rl = document.querySelector(".p-tach .sub");
+    if(rl) rl.textContent = "zona roja " + LIM.roja + " · corte " + LIM.corte;
+
+    /* --- heroe --- */
+    setLlano("m-rpm", d.rpm);
+    setLlano("m-vel", d.velocidad);
+    set("m-carga", d.carga);
+    tacometro(d.rpm);
+    vtec(d.vtec);
+
+    /* --- motor. El colector llega en PSI por contrato con el hermano; el
+           S2000 se lee en kPa, que es como lo dice el manual del F20C.
+           Conversion, no invento: 1 PSI = 6.894757 kPa. --- */
+    casilla("c-agua",   "m-agua",   d.agua,   undefined, rancio(d, "agua"));
+    casilla("c-aire",   "m-aire",   d.aire,   undefined, rancio(d, "aire"));
+    casilla("c-alt",    "m-alt",    d.alternador, 1,     rancio(d, "alternador"));
+    casilla("c-map",    "m-map",
+            (typeof d.mapPsi === "number") ? Math.round(d.mapPsi * 6.894757) : d.mapPsi,
+            undefined, rancio(d, "mapPsi"));
+    casilla("c-avance", "m-avance", d.avance, undefined, rancio(d, "avance"));
+    casilla("c-tps",    "m-tps",    d.mariposa, undefined, rancio(d, "mariposa"));
+
+    /* --- mezcla: la esfera no tiene aguja porque no hay PID 0134.
+           Si algun dia lo hubiera, se pinta el numero y punto: la esfera
+           sigue sin aguja hasta que alguien dibuje una honesta. --- */
+    set("m-trim", (typeof d.trim === "number")
+        ? ((d.trim > 0 ? "+" : d.trim < 0 ? "−" : "") + Math.abs(d.trim))
+        : d.trim);
+    var av = el("afr-val");
+    if(av){
+      if(d.afr === null || d.afr === undefined){ av.textContent = GUION; av.style.fill = ""; }
+      else { av.textContent = d.afr.toFixed(1); av.style.fill = "var(--bone)"; }
+    }
+
+    /* --- llantas --- */
+    llanta(0, d.ll0psi, d.ll0t, d.ll0baja);
+    llanta(1, d.ll1psi, d.ll1t, d.ll1baja);
+    llanta(2, d.ll2psi, d.ll2t, d.ll2baja);
+    llanta(3, d.ll3psi, d.ll3t, d.ll3baja);
+    var bajas = [];
+    if(d.ll0baja) bajas.push(0);
+    if(d.ll1baja) bajas.push(1);
+    if(d.ll2baja) bajas.push(2);
+    if(d.ll3baja) bajas.push(3);
+    avisoLlantas(bajas);
+
+    /* --- litio (banco de arranque del contrato) --- */
+    set("arr-nom", d.arrNom); set("arr-mac", d.arrMac);
+    set("arr-soc", d.arrSoc); set("arr-v", d.arrV, 1); set("arr-t", d.arrT);
+    var w = el("arr-w");
+    if(w){
+      if(d.arrW === null || d.arrW === undefined){ w.textContent = GUION; w.style.color = "var(--mute)"; }
+      else { w.style.color = ""; w.textContent = (d.arrW > 0 ? "+" : "") + d.arrW; }
+    }
+    var ab = el("arr-bar");
+    if(ab) ab.style.width = ((d.arrSoc === null || d.arrSoc === undefined) ? 0 : d.arrSoc) + "%";
+
+    /* --- servicio --- */
+    set("ace-pct", d.acePct); set("ace-km", d.aceKm); set("radio-t", d.radioC);
+
+    /* --- cabecera --- */
+    set("hd-cod", d.codigos);
+    if(typeof d.lecturas === "number") set("hd-lect", d.lecturas, 1);
+    var mil = el("hd-mil"), box = el("hd-mil-box");
+    if(mil) mil.textContent = (d.mil === true) ? "Luz de avería"
+                             : (d.mil === false ? "MIL apagada" : GUION);
+    if(box) box.classList.toggle("on", d.mil === true);
+    pip("pip-obd", d.okObd); pip("pip-tpms", d.okTpms); pip("pip-arr", d.okArr);
+  }
+
+  /* El unico mando del tablero. Un toque encola el comando; el boton no se
+     pinta al tocarlo mas alla del :active, porque un boton que se enciende
+     porque el tablero mando algo miente igual que un valor inventado. */
+  var bd = el("btn-diag");
+  if(bd) bd.addEventListener("click", function(){
+    try{ if(window.Puente && Puente.abrirDiagnostico) Puente.abrirDiagnostico(); }catch(e){}
+  });
+
+  function tic(){
+    try{
+      if(window.Puente && Puente.estado) pintar(JSON.parse(Puente.estado()));
+    }catch(e){ /* nunca romper el repintado por un dato malo */ }
+    setTimeout(tic, 700);
+  }
+  tic();
+})();
+</script>
+
+</body>
+</html>

@@ -36,8 +36,10 @@ import com.nonosky.s2000dash.PerfilVehiculo
  * 2. El estado de carga AL LADO de las tres metricas si la franja es
  *    apaisada; ENCIMA si es vertical.
  * 3. Las tres metricas en TRES COLUMNAS (rotulito arriba, cifra debajo, como
- *    el HTML) si hay ancho; en TRES FILAS de `filaGrande` —etiqueta a la
- *    izquierda, numero a la derecha— si no lo hay.
+ *    el HTML) si la tarjeta tiene ancho; en TRES FILAS de `filaGrande`
+ *    —etiqueta a la izquierda, numero a la derecha— si no lo tiene. La
+ *    decision se toma sobre la TARJETA y no sobre la caja de metricas, para
+ *    que las dos tarjetas, que miden lo mismo, elijan lo mismo.
  *
  * Eso es lo que no hacia el tablero viejo. El viejo tambien era "relativo",
  * pero siempre pintaba la MISMA forma: tres columnas de `w / 3` con la letra
@@ -45,6 +47,23 @@ import com.nonosky.s2000dash.PerfilVehiculo
  * mientras la letra crecio un 25 %, y "ALTERNADOR 13.8 V" quedo una palabra
  * encima de otra. Una caja estrecha aqui no estruja el mismo dibujo: cambia
  * de dibujo.
+ *
+ * ## El techo de alto, que es la otra mitad de la regla 2
+ *
+ * Que la tipografia salga de la caja arregla el defecto viejo, pero abre uno
+ * nuevo si se aplica a ciegas: [Pincel] deriva el tamaño del ALTO y luego
+ * tiene que meter el texto en el ANCHO. En una caja mas alta que ancha eso
+ * pide una letra que no cabe, el pincel la encoge por debajo de su tolerancia
+ * y **pinta un aspa por un fallo que no existe**. Medido aqui antes de
+ * corregirlo: "100 %" en una caja de 141x119 salia a 80 px y necesitaba 185
+ * de ancho.
+ *
+ * Por eso las cajas de las que va a salir una cifra pasan antes por [achica],
+ * que le pone TECHO al alto en fraccion del ancho y centra lo que sobra —que
+ * es, literalmente, lo que hace el HTML: su rejilla de metricas mide 50 px
+ * dentro de una franja de 112 y se centra—. La franja es sitio; no es tamaño
+ * de letra. **Derivar de la caja no es derivar de una sola de sus dos
+ * medidas.**
  *
  * ## Sin asignar memoria por cuadro
  *
@@ -157,8 +176,10 @@ object PintaEnergia {
         if (!hayVivienda) {
             // Un solo banco: la seccion entera es su tarjeta. Sin partir en
             // dos y dejar media vacia por un banco que este carro no lleva.
+            // Si el reparto de DENTRO no cupo, no se marca la seccion entera:
+            // se marca su tarjeta, que ya lleva fondo y filete, y asi se ve que
+            // el sitio existe y lo que fallo es lo de dentro.
             reparteBanco(cajasArranque, seccion, esVivienda = false)
-            repartoImposible = cajasArranque.roto
             return
         }
 
@@ -194,12 +215,30 @@ object PintaEnergia {
             return
         }
 
+        // ---- la banda del rotulo ----
+        // NO sale del reparto por pesos, y es a proposito. Un rotulo es una
+        // linea de texto que cruza la tarjeta a lo ancho: su altura tiene que
+        // ver con el ancho que cruza. Repartido por peso pasaban dos cosas
+        // malas, las dos medidas: en una tarjeta baja y ancha el titulo caia a
+        // 6,7 px, ilegible; y la tarjeta de vivienda —que cede alto a la
+        // autonomia— sacaba un rotulo mas chico que la de arranque de al lado,
+        // siendo las dos del mismo tamaño. Calculado del ancho, las dos
+        // tarjetas dan lo mismo porque las dos miden lo mismo.
+        val altoRotulo = (dentro.ancho * ROTULO_DEL_ANCHO)
+            .coerceIn(dentro.alto * ROTULO_MINIMO, dentro.alto * ROTULO_MAXIMO)
+        c.rotulo = dentro.bandaSuperior(altoRotulo)
+        val resto = dentro.bajo(altoRotulo + dentro.alto * HUECO_FILAS)
+        if (!c.rotulo.valida || !resto.valida) {
+            c.roto = true
+            return
+        }
+
         // La autonomia es OPCIONAL: solo si la tarjeta tiene alto de verdad.
         // Es contenido que se cae con elegancia antes que contenido que se
         // pinta apretado y hay que marcar.
         val conPie = esVivienda && dentro.alto >= dentro.ancho * UMBRAL_PIE
         val filas = Reparto.filas(
-            dentro,
+            resto,
             if (conPie) PESOS_CON_PIE else PESOS_SIN_PIE,
             dentro.alto * HUECO_FILAS,
         )
@@ -208,12 +247,11 @@ object PintaEnergia {
             return
         }
 
-        c.rotulo = filas[0]
-        c.barra = adelgaza(filas[2])
-        c.pie = if (conPie) filas[3] else Caja.NADA
+        c.barra = adelgaza(filas[1])
+        c.pie = if (conPie) filas[2] else Caja.NADA
 
         // ---- la franja del dato grande ----
-        val hero = filas[1]
+        val hero = filas[0]
         val huecoHero = hero.menor * HUECO_HERO
         val partes = if (hero.ancho < hero.alto * UMBRAL_SOC_AL_LADO) {
             // Franja vertical: la carga ENCIMA de las metricas.
@@ -225,11 +263,34 @@ object PintaEnergia {
             c.roto = true
             return
         }
-        c.soc = partes[0]
+        // ⚠️ EL TECHO QUE FALTABA. `Pincel.cifraGrande` saca el tamaño del
+        // ALTO de su caja pero lo tiene que meter en el ANCHO. En una caja
+        // mas alta que ancha eso pide una letra que no cabe, y `cifraGrande`
+        // la encoge por debajo de su tolerancia y PINTA UN ASPA por un fallo
+        // que no existe: la caja estaba bien, lo que estaba mal era pedirle a
+        // la altura un tamaño que solo el ancho puede pagar. Medido: "100 %"
+        // en una caja de 141x119 salia a 80 px y necesitaba 185 de ancho.
+        //
+        // Que la letra salga de la caja (regla 2) no significa que salga de
+        // UNA sola de sus dos medidas.
+        c.soc = achica(partes[0], partes[0].ancho * SOC_MANDA_EL_ANCHO)
 
         // ---- las tres metricas ----
-        val met = partes[1]
-        c.enColumnas = met.ancho >= met.alto * UMBRAL_METRICAS_EN_COLUMNAS
+        // La forma la decide la TARJETA, no la caja de metricas: las dos
+        // tarjetas son iguales, asi que asi las dos deciden igual. Decidiendo
+        // cada una por su caja, la de vivienda —que cede alto a la autonomia—
+        // salia en columnas y la de arranque en filas, una al lado de la otra,
+        // y eso no parece adaptarse: parece un descuido.
+        c.enColumnas = dentro.ancho >= dentro.alto * UMBRAL_METRICAS_EN_COLUMNAS
+        val met = achica(
+            partes[1],
+            partes[1].ancho * if (c.enColumnas) METRICAS_EN_COLUMNAS_DEL_ANCHO
+            else METRICAS_EN_FILAS_DEL_ANCHO,
+        )
+        if (!met.valida) {
+            c.roto = true
+            return
+        }
         val huecoMet = met.menor * HUECO_METRICAS
         val tres = if (c.enColumnas) Reparto.columnasIguales(met, 3, huecoMet)
         else Reparto.filasIguales(met, 3, huecoMet)
@@ -268,6 +329,26 @@ object PintaEnergia {
         val grueso = minOf(fila.alto, maxOf(fila.alto * BARRA_SUELO, fila.ancho * BARRA_GRUESO))
         val sobra = (fila.alto - grueso) * 0.5f
         return Caja(fila.x0, fila.y0 + sobra, fila.x1, fila.y1 - sobra)
+    }
+
+    /**
+     * Le pone TECHO al alto de una caja y la centra en el hueco que tenia.
+     *
+     * Es el contrapeso de la regla 2. La tipografia sale del alto de la caja,
+     * pero una caja mas alta que ancha pide entonces una letra que no cabe a
+     * lo ancho; el pincel la encoge, cruza su tolerancia y marca un fallo que
+     * no existe. Recortando el alto ANTES, el tamaño que se derive de el ya
+     * nace cabiendo.
+     *
+     * Lo que sobra no se rellena con nada: aire arriba y abajo. Es lo mismo
+     * que hace el HTML, donde la rejilla de metricas mide 50 px dentro de una
+     * franja de 112 y se centra — la franja es sitio, no es tamaño de letra.
+     */
+    private fun achica(caja: Caja, altoMaximo: Float): Caja {
+        if (!caja.valida) return Caja.NADA
+        if (!altoMaximo.isFinite() || altoMaximo <= 0f || caja.alto <= altoMaximo) return caja
+        val sobra = (caja.alto - altoMaximo) * 0.5f
+        return Caja(caja.x0, caja.y0 + sobra, caja.x1, caja.y1 - sobra)
     }
 
     // ========================================================================
@@ -566,12 +647,14 @@ object PintaEnergia {
      */
     private fun ajusta(p: Paint, texto: String, anchoMax: Float, ideal: Float): Float {
         if (texto.isEmpty()) return 0f
-        if (anchoMax <= 0f || ideal <= 0f) return -1f
+        // Ni siquiera a su tamaño ideal seria legible: la caja es demasiado
+        // baja para este rotulito y encogerlo solo lo empeoraria.
+        if (anchoMax <= 0f || ideal < MINIMO_LEGIBLE) return -1f
         p.textSize = ideal
         val medido = p.measureText(texto)
         if (medido <= anchoMax) return medido
         val proporcional = ideal * (anchoMax / medido)
-        if (proporcional < ideal * Pincel.SUELO) return -1f
+        if (proporcional < maxOf(ideal * Pincel.SUELO, MINIMO_LEGIBLE)) return -1f
         p.textSize = proporcional
         return p.measureText(texto)
     }
@@ -838,21 +921,38 @@ object PintaEnergia {
 
     // --- Pesos del reparto. Sacados del presupuesto vertical del HTML -------
     //
-    // Tarjeta de vivienda, 296 px con 12 de aire: rotulo 28, franja del dato
-    // 112, barra 16, autonomia 64. Son PESOS, no pixeles: la misma proporcion
-    // en cualquier caja.
+    // Tarjeta de vivienda, 296 px con 12 de aire: franja del dato 112, barra
+    // 16, autonomia 64. Son PESOS, no pixeles: la misma proporcion en
+    // cualquier caja. El rotulo no esta aqui — se calcula del ancho, ver
+    // `reparteBanco`.
 
-    private val PESOS_CON_PIE = floatArrayOf(23f, 112f, 16f, 64f)
-    private val PESOS_SIN_PIE = floatArrayOf(23f, 112f, 16f)
+    private val PESOS_CON_PIE = floatArrayOf(112f, 16f, 64f)
+    private val PESOS_SIN_PIE = floatArrayOf(112f, 16f)
 
-    /** Carga y metricas, lado a lado: 76 px de cifra contra la rejilla `.mg`. */
-    private val PESOS_SOC_AL_LADO = floatArrayOf(30f, 70f)
+    /**
+     * Carga y metricas, lado a lado.
+     *
+     * En el HTML la cifra grande es `flex:0 0 auto`: se lleva lo que necesita
+     * —unos 152 de 368— y la rejilla se queda con el resto. Aqui no hay flex,
+     * asi que se le da ese 38 % por escrito. Con el 30 % que tenia antes,
+     * "100 %" no cabia y `cifraGrande` marcaba la caja.
+     */
+    private val PESOS_SOC_AL_LADO = floatArrayOf(38f, 62f)
 
     /** Y apilados, cuando la franja es vertical. */
     private val PESOS_SOC_ARRIBA = floatArrayOf(42f, 58f)
 
-    /** Dentro de una metrica en columna: rotulito y cifra, como el HTML. */
-    private val PESOS_METRICA = floatArrayOf(18f, 82f)
+    /**
+     * Dentro de una metrica en columna: rotulito y cifra, como el HTML.
+     *
+     * El rotulito se lleva el 22 % y lo LLENA (ver
+     * [FRACCION_ETIQUETA_COLUMNA]). Con el 18 % de antes y una letra al 0,72
+     * de su casilla, los tres rotulitos salian a 5–7 px en casi todas las
+     * disposiciones anchas y se caian los tres: quedaban tres numeros sin
+     * nombre. En el HTML esa etiqueta mide 8,5 px en una linea de 9 —o sea,
+     * la llena— y esto es lo mismo escrito en proporciones.
+     */
+    private val PESOS_METRICA = floatArrayOf(22f, 78f)
 
     // --- Umbrales de FORMA. Ninguno mira la pantalla, todos su propia caja --
 
@@ -865,8 +965,19 @@ object PintaEnergia {
     /** Carga al lado de las metricas si la franja es apaisada. */
     private const val UMBRAL_SOC_AL_LADO = 1.2f
 
-    /** Tres columnas si hay ancho; si no, tres filas de `filaGrande`. */
-    private const val UMBRAL_METRICAS_EN_COLUMNAS = 2.0f
+    /**
+     * Tres columnas si hay ancho; si no, tres filas de `filaGrande`.
+     *
+     * Se mide sobre la TARJETA entera, no sobre la caja de metricas, para que
+     * las dos tarjetas —que son iguales— decidan igual.
+     *
+     * El numero sale de comparar que forma da la letra mas grande. En
+     * columnas, la cifra acaba valiendo ~0,10 del ancho de la caja de
+     * metricas; en filas, ~0,207 de su alto. Se cruzan en 2,07:1 sobre la caja
+     * de metricas, que es ~1,9:1 sobre la tarjeta porque la caja de metricas
+     * se lleva el 62 % del ancho.
+     */
+    private const val UMBRAL_METRICAS_EN_COLUMNAS = 1.9f
 
     // --- Aire, todo en fraccion de la caja que lo contiene ------------------
 
@@ -882,11 +993,60 @@ object PintaEnergia {
     private const val BARRA_GRUESO = 0.045f
     private const val BARRA_SUELO = 0.35f
 
+    // --- Techos de alto. El ancho manda sobre el tamaño de la letra --------
+    //
+    // Todos dicen lo mismo: hasta aqui puede crecer el alto de esta caja,
+    // porque de su alto sale la letra y la letra tiene que caber a lo ANCHO.
+    // Sin ellos, una caja alta y estrecha hace que el pincel encoja la cifra
+    // por debajo de su tolerancia y marque un fallo inexistente.
+
+    /** "100 %" ocupa ~2,3 veces su tamaño; con 0,68 de la caja, cabe en 0,58. */
+    private const val SOC_MANDA_EL_ANCHO = 0.58f
+
+    /**
+     * En columnas, la banda de las tres metricas no llena la franja: se centra
+     * en ella, como la rejilla `.mg` del HTML —50 px dentro de 112—. Con 0,18
+     * del ancho, la cifra sale a ~0,10 del ancho y "+1 234 W" entra en su
+     * tercio sin cruzar la tolerancia.
+     */
+    private const val METRICAS_EN_COLUMNAS_DEL_ANCHO = 0.18f
+
+    /** En filas basta con impedir que la caja sea mucho mas alta que ancha. */
+    private const val METRICAS_EN_FILAS_DEL_ANCHO = 1.15f
+
+    /**
+     * La banda del rotulo, en fraccion del ANCHO de la tarjeta, con suelo y
+     * techo en fraccion de su alto para que no se descuadre en los extremos.
+     * En el HTML son 28 px de banda en una tarjeta de 396 de ancho: 0,071 —
+     * aqui algo menos, porque la banda del HTML incluye su propio relleno.
+     */
+    private const val ROTULO_DEL_ANCHO = 0.055f
+    private const val ROTULO_MINIMO = 0.10f
+    private const val ROTULO_MAXIMO = 0.30f
+
     // --- Tipografia del texto chico, en fraccion de SU caja -----------------
 
-    private const val FRACCION_MAC = 0.30f
-    private const val FRACCION_NOMBRE = 0.31f
-    private const val FRACCION_ETIQUETA_COLUMNA = 0.72f
+    private const val FRACCION_MAC = 0.34f
+    private const val FRACCION_NOMBRE = 0.34f
+    /** El rotulito LLENA su casilla, como el `.k` de 8,5 px en 9 del HTML. */
+    private const val FRACCION_ETIQUETA_COLUMNA = 0.88f
+
+    /**
+     * Por debajo de esto no se lee, y punto.
+     *
+     * Es el UNICO numero en pixeles absolutos de todo el fichero, y esta a
+     * proposito: la legibilidad no es proporcional a nada — es una propiedad
+     * fisica del ojo a medio metro de la pantalla del radio. Un rotulito por
+     * debajo NO se pinta mas chico (a 4 px solo ensucia): se cae entero. Todas
+     * las demas medidas de aqui son fracciones de una caja.
+     *
+     * El 6 sale de la propia variante HTML, que es la referencia: su MAC mide
+     * 8 px diseñada a 1024x600, y en la pantalla mas chica que hay que
+     * aguantar —800x480— se escala por 0,78 y acaba en 6,2 px reales. Poner el
+     * suelo por encima de eso seria tirar en Canvas un dato que el tablero de
+     * al lado, en el mismo carro, si enseña.
+     */
+    private const val MINIMO_LEGIBLE = 6f
 
     /** Levanta el rotulo para casar con la linea inferior de `tituloDeSeccion`. */
     private const val SUBE_ROTULO = 0.10f
@@ -927,7 +1087,13 @@ object PintaEnergia {
     private const val UNIDAD_GRADO = "°C"
     private const val UNIDAD_HORA = "h"
 
-    /** El separador de miles del HTML: espacio fino, no coma. */
+    /**
+     * El separador de miles del HTML: espacio FINO, no coma.
+     *
+     * Escrito con su punto de codigo y no con el caracter literal, que en un
+     * fichero fuente no se distingue de un espacio normal y el primero que
+     * "arregle" el formato lo cambiaria sin enterarse.
+     */
     private const val ESPACIO_FINO = ' '
 
     private const val SIN_CLAVE = Long.MIN_VALUE

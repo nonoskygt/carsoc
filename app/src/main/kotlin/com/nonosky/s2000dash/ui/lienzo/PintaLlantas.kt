@@ -197,14 +197,14 @@ object PintaLlantas {
             parpadeo(ahora) -> Pincel.OXIDO
             else -> Pincel.OCRE
         }
-        val texto = if (!receptorVivo) "SIN RECEPTOR" else textoDeAviso(bajas, primera)
+        val rotuloAviso = if (!receptorVivo) "SIN RECEPTOR" else textoDeAviso(bajas, primera)
 
         relleno.color = color
         val radio = caja.alto * 0.16f
         canvas.drawCircle(caja.x0 + radio, caja.cy, radio, relleno)
 
         menudo.color = color
-        if (!texto(canvas, trazado.avisoTextoCaja, texto, menudo, 0.62f, centrado = false)) {
+        if (!texto(canvas, trazado.avisoTextoCaja, rotuloAviso, menudo, 0.62f, centrado = false)) {
             // Ni cortado cabe: mejor un aspa que un aviso a medias, que se
             // leeria como el nombre de otra rueda.
             pincel.marcaDeQueNoCabe(canvas, caja)
@@ -230,8 +230,8 @@ object PintaLlantas {
         val celda = trazado.casilla[i]
         if (!celda.valida) return
 
-        val psi = if (receptorVivo) d.llPsi(i) else null
-        val temp = if (receptorVivo) d.llTemp(i) else null
+        val psi = if (receptorVivo) psiDe(d, i) else null
+        val temp = if (receptorVivo) tempDe(d, i) else null
         val baja = receptorVivo && vaBaja(d, i)
         val k = i * 2 + (if (baja) 1 else 0)
 
@@ -273,7 +273,7 @@ object PintaLlantas {
         // --- el rotulo y el dibujo ---
         val colorMarca = if (baja) Pincel.OXIDO else Pincel.ARENA
         marcaRueda.color = colorMarca
-        if (!texto(canvas, trazado.marca[k], DatosTablero.RUEDAS[i], marcaRueda, 0.60f, true)) {
+        if (!texto(canvas, trazado.marca[k], ESQUINAS[i], marcaRueda, 0.60f, true)) {
             pincel.marcaDeQueNoCabe(canvas, celda)
         }
         dibujarRueda(canvas, trazado.dibujo[k], i, colorMarca)
@@ -400,7 +400,7 @@ object PintaLlantas {
      * El color de una temperatura de llanta.
      *
      * No cambia cuando la rueda va baja, y es a proposito: si las dos cosas se
-     * pintaran de oxico a la vez no se sabria cual de las dos manda. Los
+     * pintaran de oxido a la vez no se sabria cual de las dos manda. Los
      * umbrales son los del tablero viejo, medidos en el carro.
      */
     private fun colorDeTemperatura(c: Int?): Int = when {
@@ -426,9 +426,33 @@ object PintaLlantas {
      * vacia, y gritar por eso enseña a ignorar el aviso.
      */
     private fun vaBaja(d: DatosTablero, i: Int): Boolean {
-        d.llBaja(i)?.let { return it }
-        val psi = d.llPsi(i) ?: return false
+        bajaDe(d, i)?.let { return it }
+        val psi = psiDe(d, i) ?: return false
         return psi in Escalas.PSI_PLAUSIBLE && psi < Escalas.PSI_AVISO_BAJA
+    }
+
+    // --- Las cuatro ruedas, por indice --------------------------------------
+    //
+    // El contrato las nombra `ll0psi`, `ll1psi`… porque asi viajan en el JSON.
+    // Estos tres `when` las vuelven un bucle: cuatro copias de la misma linea
+    // son cuatro sitios donde equivocarse de rueda. Un `when` sobre un Int no
+    // asigna memoria, asi que se puede llamar desde el camino de dibujo.
+    //
+    // Viven aqui y no en [DatosTablero] a proposito: ese fichero lo comparten
+    // todos los pintores de la variante Canvas y se esta escribiendo a la vez
+    // que este. Si algun dia se mudan alla, que sea de una pieza.
+
+    private fun psiDe(d: DatosTablero, i: Int): Float? = when (i) {
+        0 -> d.ll0psi; 1 -> d.ll1psi; 2 -> d.ll2psi; 3 -> d.ll3psi; else -> null
+    }
+
+    private fun tempDe(d: DatosTablero, i: Int): Int? = when (i) {
+        0 -> d.ll0t; 1 -> d.ll1t; 2 -> d.ll2t; 3 -> d.ll3t; else -> null
+    }
+
+    /** Lo que dice el servicio. `null` es "no lo se", no es "va bien". */
+    private fun bajaDe(d: DatosTablero, i: Int): Boolean? = when (i) {
+        0 -> d.ll0baja; 1 -> d.ll1baja; 2 -> d.ll2baja; 3 -> d.ll3baja; else -> null
     }
 
     /** 500 ms encendido, 500 ms apagado, con el reloj comun del tablero. */
@@ -541,7 +565,7 @@ object PintaLlantas {
         val guardado = avisoTexto
         if (guardado != null && avisoCodigo == codigo) return guardado
         val nuevo = if (bajas == 1 && primera in 0..3) {
-            DatosTablero.RUEDAS[primera] + " BAJA"
+            ESQUINAS[primera] + " BAJA"
         } else {
             "" + bajas + " LLANTAS BAJAS"
         }
@@ -551,6 +575,18 @@ object PintaLlantas {
     }
 
     // --- Numeros de esta seccion --------------------------------------------
+
+    /**
+     * Los nombres cortos, en el orden en que el servicio manda las ruedas:
+     * delantera izquierda, delantera derecha, trasera izquierda, trasera
+     * derecha.
+     *
+     * El orden ES el dato: es el mismo de `Reparto.rejilla`, asi que el indice
+     * cae en la esquina de pantalla que le toca. Si alguien lo cambia sin
+     * querer, el tablero avisaria de la rueda equivocada — y por eso hay una
+     * prueba que lo fija.
+     */
+    private val ESQUINAS = arrayOf("DI", "DD", "TI", "TD")
 
     /** Fondo de casilla en calma: el rebaje del HTML sobre la tarjeta. */
     private const val FONDO_CASILLA = 0xFF202722.toInt()

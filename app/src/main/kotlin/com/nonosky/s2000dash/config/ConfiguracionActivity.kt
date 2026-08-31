@@ -14,6 +14,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.nonosky.s2000dash.EstadoActual
 import com.nonosky.s2000dash.PerfilVehiculo
+import com.nonosky.s2000dash.Variante
 import kotlin.concurrent.thread
 
 /**
@@ -95,6 +96,9 @@ class ConfiguracionActivity : Activity() {
         }
 
         raiz.addView(separador())
+        pintarVariante()
+
+        raiz.addView(separador())
         raiz.addView(botonPequeno("Restaurar los valores de fábrica") {
             Emparejados.restaurar(this)
             pintar()
@@ -102,6 +106,36 @@ class ConfiguracionActivity : Activity() {
         raiz.addView(nota(
             "Los cambios se aplican al reiniciar el tablero. " +
                 "Un aparato sin asignar no se sondea: no gasta radio."
+        ))
+    }
+
+    /**
+     * COMO SE PINTA EL TABLERO: HTML o Canvas.
+     *
+     * Es una fila y no un menu porque solo hay dos, y con dos un interruptor se
+     * entiende sin leer nada: dice cual esta puesta y a cual se cambia.
+     *
+     * Los dos tableros enseñan lo mismo con los mismos datos —la lectura y las
+     * reglas de frescura son las de `EstadoDelTablero`, compartidas— asi que
+     * esto no cambia lo que se ve, sino quien lo pinta y lo que cuesta. El
+     * Canvas repinta al ritmo del termometro del radio y baja a un cuadro por
+     * segundo cuando el aparato se calienta; el WebView, no.
+     */
+    private fun pintarVariante() {
+        val actual = Variante.actual(this)
+        val otra = Variante.contraria(actual)
+        raiz.addView(fila(
+            "Tablero",
+            "${Variante.rotulo(actual)}  ·  toca para usar ${Variante.rotulo(otra)}",
+            ok = true,
+        ) {
+            Variante.poner(this, otra)
+            pintar()
+        })
+        raiz.addView(nota(
+            "El tablero Canvas repinta al ritmo del termómetro del radio: " +
+                "5 cuadros por segundo en frío y uno en caliente. " +
+                "El cambio se ve al volver a abrir el tablero."
         ))
     }
 
