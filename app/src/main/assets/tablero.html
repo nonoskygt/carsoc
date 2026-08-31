@@ -38,12 +38,28 @@
 
 *{box-sizing:border-box;margin:0;padding:0}
 
+/* ===================== RESPONSIVE =====================
+   El tablero se DISEÑA en 1024x600 y se ESCALA al viewport real. No es
+   pereza: la maquetacion esta afinada a esa caja —tamaños de cifra,
+   holguras, el reloj de mezcla— y estirarla con unidades relativas la
+   descuadra, que es exactamente como se rompio el tablero del S2000 al
+   pasarlo de 1280x480 a 1024x600.
+   Escalando entra en CUALQUIER pantalla sin romperse nunca. El precio son
+   bandas si la relacion de aspecto no coincide, y es un precio barato.
+   ==================================================== */
 html,body{
-  width:1024px;height:600px;
+  width:100%;height:100%;
   overflow:hidden;                 /* sin scroll de ninguna clase */
   /* TRANSPARENTE: por aqui asoma el fondo de pantalla del radio.
      El velo va en .frame, no aqui, para poder graduarlo en un solo sitio. */
   background:transparent;
+}
+
+#lienzo{
+  position:absolute;left:50%;top:50%;
+  width:1024px;height:600px;
+  transform-origin:50% 50%;
+  transform:translate(-50%,-50%);   /* la escala la pone el JS */
 }
 
 body{
@@ -56,7 +72,7 @@ body{
 }
 
 /* ---------- capa de fondo: curvas de nivel ---------- */
-#relieve{position:fixed;top:0;left:0;width:1024px;height:600px;z-index:0;pointer-events:none;opacity:1}
+#relieve{position:absolute;top:0;left:0;width:1024px;height:600px;z-index:0;pointer-events:none;opacity:1}
 
 /* ---------- rejilla maestra ---------- */
 /* Velo sobre el fondo del radio.
@@ -443,6 +459,7 @@ body{
 <body>
 
 <!-- ============ CURVAS DE NIVEL + RETICULA (fondo, muy tenue) ============ -->
+<div id="lienzo">
 <svg id="relieve" width="1024" height="600" viewBox="0 0 1024 600" aria-hidden="true"
      xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
   <defs>
@@ -1028,6 +1045,22 @@ body{
   </div>
 
 </div>
+
+<script>
+/* Escala el lienzo al viewport. Se recalcula al girar la pantalla o al
+   cambiar de aparato; en el radio pasa una vez y ya. */
+(function(){
+  var L = document.getElementById("lienzo");
+  if(!L) return;
+  function ajustar(){
+    var k = Math.min(window.innerWidth / 1024, window.innerHeight / 600);
+    L.style.transform = "translate(-50%,-50%) scale(" + k + ")";
+  }
+  ajustar();
+  window.addEventListener("resize", ajustar);
+  window.addEventListener("orientationchange", ajustar);
+})();
+</script>
 
 <script>
 /* ============================================================
