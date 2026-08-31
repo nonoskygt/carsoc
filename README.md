@@ -156,6 +156,37 @@ comprobó.
 - **Auto-actualización** por descubrimiento UDP, con verificación de firma
   del APK antes de instalar.
 
+## Sondear un carro nuevo
+
+Antes de escribir una línea para un carro, se le pregunta qué es capaz de
+contestar:
+
+```bash
+python tools/sondear.py --puerto COM3 --carro fit
+```
+
+Solo lee — no manda el modo 04, que además de borrar las averías borra los
+monitores de emisiones. Deja un informe fechado en `docs/` con el protocolo
+real, el mapa de PIDs de **todos** los módulos, el VIN leído del carro, y las
+lecturas por segundo cronometradas.
+
+Y distingue tres cosas que casi ninguna herramienta distingue:
+
+| | |
+|---|---|
+| `no lo tiene` | se preguntó y el carro contestó NO DATA |
+| `lo rechazó (7F)` | el módulo lo entendió y se negó |
+| `no se preguntó` | nunca se llegó a preguntar |
+
+La primera versión las mezclaba: con el carro mudo publicaba «0 PIDs» y «NO»
+en las doce filas de lo que necesita el tablero. Eso es pintar un cero donde
+hay un «no lo sé» — el pecado que este proyecto persigue — cometido por la
+herramienta escrita para evitarlo. Se comprueba a sí misma sin carro:
+
+```bash
+python tools/sondear.py --prueba
+```
+
 ## Probar sin carro
 
 Hay dos emuladores, uno por radio: `elementradio` a 1024×600 y `s2000radio`
