@@ -75,7 +75,7 @@ Ajustes → Opciones de desarrollador → **Depuración inalámbrica** → *Vinc
 código*. Sale un `IP:puerto` distinto del de conexión y un código de 6 dígitos:
 
 ```bash
-adb pair 192.168.2.102:45041 743830
+adb pair 192.168.2.102:PUERTO CODIGO   # el codigo es de un solo uso y sale en la pantalla del radio
 ```
 
 **La contraseña del menú de fábrica no hace falta.** `development_settings_enabled`
