@@ -143,7 +143,10 @@ object PintaEnergia {
         } else if (agotado(d.arrSoc)) {
             bancoQueGrita = ARRANQUE; campoQueGrita = ALARMA_SOC
         }
-        val atenua = parpadeo(ahora)
+        // Se pregunta la hora SOLO si hay algo que parpadear. Preguntarla
+        // "por si acaso" dejaria el tablero repintando cinco veces por segundo
+        // para siempre, que es el defecto que `Latido` viene a arreglar.
+        val atenua = bancoQueGrita != NADIE && Latido.parpadeo(ahora)
 
         if (hayVivienda) {
             banco(
@@ -632,7 +635,6 @@ object PintaEnergia {
      * segundo y el parpadeo se ve irregular. Sigue viendose que algo cambia,
      * que es lo que tiene que conseguir; no se ve bonito.
      */
-    private fun parpadeo(ahora: Long): Boolean = (ahora / MS_PARPADEO) % 2L == 0L
 
     // ========================================================================
     // TEXTO CHICO. Medido, encogido y —si hace falta— caido.
@@ -1062,7 +1064,6 @@ object PintaEnergia {
     private const val SOC_AVISO = 35
     private const val SOC_CRITICO = 15
 
-    private const val MS_PARPADEO = 500L
 
     // --- Quien grita ---------------------------------------------------------
 

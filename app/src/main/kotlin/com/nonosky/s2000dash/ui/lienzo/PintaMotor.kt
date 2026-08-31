@@ -609,7 +609,7 @@ object PintaMotor {
      */
     private fun colorAgua(c: Int?, ahora: Long): Int = when {
         c == null -> Pincel.APAGADO
-        c >= EngineConstants.COOLANT_HIGH_C -> if (parpadeo(ahora)) Pincel.OXIDO else Pincel.OCRE
+        c >= EngineConstants.COOLANT_HIGH_C -> if (Latido.parpadeo(ahora)) Pincel.OXIDO else Pincel.OCRE
         c >= EngineConstants.COOLANT_AVISO_C -> Pincel.OCRE
         c >= EngineConstants.COOLANT_TIBIO_C -> Pincel.MUSGO
         else -> Pincel.LAGO
@@ -636,7 +636,6 @@ object PintaMotor {
     /** Tinta viva si hay dato, apagada si no. La regla en una linea. */
     private fun tinta(v: Any?): Int = if (v == null) Pincel.APAGADO else Pincel.TINTA
 
-    private fun parpadeo(ahora: Long): Boolean = (ahora / 500L) % 2L == 0L
 
     // =====================================================================
     // Cocina

@@ -111,9 +111,24 @@ libras antes de tiempo todos los días, hasta que aprendieras a ignorarla.
 
 ![](docs/img/variante-canvas.png)
 
-*El S2000 pintado en Canvas nativo.* Se elige en ajustes. La de Canvas es más
-ligera y **deja que el guardián térmico gobierne los fotogramas**: baja a uno
-por segundo cuando el radio se calienta. La de HTML no hace eso.
+*El S2000 pintado en Canvas nativo.* Se elige en ajustes.
+
+Y aquí hay una cifra en vez de una promesa, porque por fin se midió — con el
+carro parado, en el emulador, **no en el radio**:
+
+| | hilos | PSS | CPU en 30 s |
+|---|---|---|---|
+| HTML sobre WebView | 56 | 83,6 MB | 0,5 % de un núcleo |
+| Canvas nativo | 33 | **29,4 MB** | **0,2 %** de un núcleo |
+
+La primera medición dejó al Canvas en **3,4 %** — siete veces peor que el
+WebView, justo al revés de lo que este proyecto llevaba meses afirmando.
+Repintaba la pantalla entera cinco veces por segundo pasara lo que pasara,
+mientras el WebView solo recompone cuando algo cambia. Ahora repinta cuando
+hay motivo: los datos cambiaron, o algo está parpadeando.
+
+Además el Canvas **deja que el guardián térmico gobierne los fotogramas**:
+baja a uno por segundo cuando el radio se calienta. La de HTML no hace eso.
 
 ## El menú de emparejamiento
 

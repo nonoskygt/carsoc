@@ -211,7 +211,7 @@ object PintaLlantas {
         // Sin receptor no hay alarma: no se sabe. Se dice apagado y quieto.
         val color = when {
             !receptorVivo -> Pincel.APAGADO
-            parpadeo(ahora) -> Pincel.OXIDO
+            Latido.parpadeo(ahora) -> Pincel.OXIDO
             else -> Pincel.OCRE
         }
         val rotuloAviso = if (!receptorVivo) "SIN RECEPTOR" else textoDeAviso(bajas, primera)
@@ -473,7 +473,6 @@ object PintaLlantas {
     }
 
     /** 500 ms encendido, 500 ms apagado, con el reloj comun del tablero. */
-    private fun parpadeo(ahora: Long): Boolean = (ahora / 500L) % 2L == 0L
 
     // --- Cocina de pintado --------------------------------------------------
 

@@ -207,9 +207,32 @@ class TableroLienzo(
         super.onDetachedFromWindow()
     }
 
+    /**
+     * El latido: leer, y repintar SOLO SI HAY MOTIVO.
+     *
+     * Antes repintaba siempre, y eso costo caro. Medido en el emulador con el
+     * carro parado —o sea con todo el tablero en guiones y sin un solo sensor
+     * conectado— la variante Canvas gastaba **siete veces mas CPU que la de
+     * HTML** (3,4 % de un nucleo contra 0,5 %), estando a la vez en un tercio
+     * de memoria. La CPU es lo que calienta el radio, y no dejarlo caliente es
+     * media razon de ser de esta variante: el argumento se estaba cumpliendo
+     * al reves.
+     *
+     * La causa no era el dibujo sino cuando: el lienzo repintaba la pantalla
+     * entera cinco veces por segundo pasara lo que pasara, mientras que el
+     * WebView solo recompone cuando algun nodo cambia. Con el carro parado no
+     * cambia ninguno; el lienzo estaba repintando cuarenta veces seguidas
+     * exactamente los mismos guiones.
+     *
+     * Hay motivo cuando la lectura CAMBIO —[DatosTablero] es `data class`, asi
+     * que compararla es comparar todos sus campos— o cuando algo parpadeaba en
+     * el ultimo cuadro. La lectura se sigue haciendo al ritmo de siempre: lo
+     * que se salta es el dibujo, no el mirar.
+     */
     private val repintar = Runnable {
+        val antes = datos
         latir()
-        invalidate()
+        if (datos != antes || Latido.alguienParpadea) invalidate()
         programarRepintado()
     }
 
@@ -250,6 +273,11 @@ class TableroLienzo(
     // --- Pintado ------------------------------------------------------------
 
     override fun onDraw(canvas: Canvas) {
+        // Se borra la huella ANTES de pintar: la dejan los pintores que
+        // parpadean, al preguntar la hora. Lo que quede apuntado al terminar
+        // este cuadro es lo que decide si hace falta el siguiente.
+        Latido.nuevoCuadro()
+
         relleno.color = Pincel.FONDO
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), relleno)
 

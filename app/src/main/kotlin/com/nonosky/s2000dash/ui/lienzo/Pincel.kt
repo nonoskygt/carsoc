@@ -177,10 +177,12 @@ class Pincel {
         // del medio es del motor ENTERA, y las celdas pasaron de 150x40 a
         // 150x110. Cinco de seis salieron tachadas de naranja.
         //
-        // El tope es el que ya tenia el diseño: en el HTML el numero mide 25
-        // en una celda de 150 de ancho, o sea la sexta parte larga. Con las
-        // proporciones del diseño este minimo no muerde —24,8 contra un tope
-        // de 30— asi que no cambia ni un pixel de lo que ya cabia.
+        // El tope se eligio MIDIENDO, no por bonito: se subio hasta que dejo
+        // de tocar las celdas que ya cabian —las del Element, de 110x38, que
+        // con 0,20 salian un 7 % mas chicas sin motivo— y se comprobo que
+        // seguia salvando las estiradas del S2000. Un tope demasiado apretado
+        // no rompe nada, pero encoge la letra de un tablero que se mira de
+        // reojo, y eso tambien se paga.
         val idealValor = minOf(caja.alto * VALOR_FILA, caja.ancho * VALOR_POR_ANCHO)
         valor.textSize = idealValor
         valor.color = color
@@ -526,11 +528,11 @@ class Pincel {
          *
          * Existe porque una fila es una sola linea: `etiqueta ... numero
          * unidad`. Sin este tope, una caja estirada a lo alto pide una letra
-         * que no cabe a lo ancho y la fila se marca entera. Sale del propio
-         * diseño —numero de 25 en una celda de 150— con un poco de holgura,
-         * asi que con las proporciones de siempre no muerde.
+         * que no cabe a lo ancho y la fila se marca entera. El valor sale de
+         * medir las celdas reales de los dos carros: por encima de este tope
+         * empieza a encoger filas que cabian de sobra.
          */
-        const val VALOR_POR_ANCHO = 0.20f
+        const val VALOR_POR_ANCHO = 0.26f
 
         /** Tamaño de una cifra que va sola y manda en su caja. */
         const val CIFRA = 0.68f
