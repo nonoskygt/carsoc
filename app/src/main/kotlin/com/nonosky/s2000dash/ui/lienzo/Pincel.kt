@@ -165,7 +165,23 @@ class Pincel {
     ): Boolean {
         if (!caja.valida) return false
 
-        val idealValor = caja.alto * VALOR_FILA
+        // ⚠️ LA LETRA SALE DE LAS DOS DIMENSIONES DE LA CAJA, NO SOLO DEL ALTO.
+        //
+        // Esta es la misma piedra que rompio el tablero viejo del S2000, y se
+        // volvio a pisar aqui: una fila es `etiqueta ... numero unidad` en UNA
+        // linea, asi que su ancho manda tanto como su alto. Sacando el tamaño
+        // solo del alto, una caja que se estira a lo alto pide una letra que
+        // no cabe a lo ancho, y la fila entera se marca como que no cupo.
+        //
+        // Paso en el Canvas del S2000: ese carro no lleva nevera, su columna
+        // del medio es del motor ENTERA, y las celdas pasaron de 150x40 a
+        // 150x110. Cinco de seis salieron tachadas de naranja.
+        //
+        // El tope es el que ya tenia el diseño: en el HTML el numero mide 25
+        // en una celda de 150 de ancho, o sea la sexta parte larga. Con las
+        // proporciones del diseño este minimo no muerde —24,8 contra un tope
+        // de 30— asi que no cambia ni un pixel de lo que ya cabia.
+        val idealValor = minOf(caja.alto * VALOR_FILA, caja.ancho * VALOR_POR_ANCHO)
         valor.textSize = idealValor
         valor.color = color
         valor.textAlign = Paint.Align.RIGHT
@@ -174,12 +190,16 @@ class Pincel {
         unidad.color = if (color == APAGADO) APAGADO else ARENA
         unidad.textAlign = Paint.Align.LEFT
 
-        val aire = caja.alto * 0.10f
+        // Los huecos se derivan del NUMERO, no del alto de la caja. Con las
+        // proporciones del diseño dan lo mismo que antes (0,62 x 0,16 = 0,10);
+        // en una caja estirada acompañan a la letra en vez de abrirse solos.
+        val aire = idealValor * 0.16f
+        val pegado = idealValor * 0.13f
         var cupo = true
 
         var unidadVisible = !unid.isNullOrEmpty()
         var anchoUnidad =
-            if (unidadVisible) unidad.measureText(unid!!) + caja.alto * 0.08f else 0f
+            if (unidadVisible) unidad.measureText(unid!!) + pegado else 0f
         // Una unidad que se lleva media fila deja al NUMERO sin sitio, y el
         // numero es el dato. Antes que empujarlo fuera de su caja —donde
         // pisaria a la seccion vecina, que es como se rompio el tablero
@@ -205,11 +225,14 @@ class Pincel {
         val xValor = caja.x1 - anchoUnidad
         canvas.drawText(val_, xValor, yBase, valor)
         if (unidadVisible) {
-            canvas.drawText(unid!!, xValor + caja.alto * 0.08f, yBase, unidad)
+            canvas.drawText(unid!!, xValor + pegado, yBase, unidad)
         }
 
-        // Lo que quede, para la palabra.
-        val idealEtiqueta = caja.alto * ETIQUETA_FILA
+        // Lo que quede, para la palabra. Encoge CON el numero: si el numero
+        // tuvo que ceder por ancho, la etiqueta cede en la misma proporcion y
+        // la fila conserva su jerarquia en vez de quedar con la palabra mas
+        // grande que el dato.
+        val idealEtiqueta = idealValor * (ETIQUETA_FILA / VALOR_FILA)
         etiqueta.color = APAGADO
         etiqueta.textAlign = Paint.Align.LEFT
         val disponible = xValor - anchoValor - aire - caja.x0
@@ -497,6 +520,17 @@ class Pincel {
 
         /** Tamaño de la etiqueta de una fila. */
         const val ETIQUETA_FILA = 0.24f
+
+        /**
+         * Tope del numero de una fila POR EL ANCHO de su caja.
+         *
+         * Existe porque una fila es una sola linea: `etiqueta ... numero
+         * unidad`. Sin este tope, una caja estirada a lo alto pide una letra
+         * que no cabe a lo ancho y la fila se marca entera. Sale del propio
+         * diseño —numero de 25 en una celda de 150— con un poco de holgura,
+         * asi que con las proporciones de siempre no muerde.
+         */
+        const val VALOR_POR_ANCHO = 0.20f
 
         /** Tamaño de una cifra que va sola y manda en su caja. */
         const val CIFRA = 0.68f

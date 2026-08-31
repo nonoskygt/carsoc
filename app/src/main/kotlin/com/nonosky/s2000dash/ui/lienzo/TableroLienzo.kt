@@ -82,6 +82,26 @@ class TableroLienzo(
 
         /** Abre el menu de configuracion y emparejamiento. */
         fun abrirAjustes()
+
+        // --- Calibracion de llantas ------------------------------------------
+        //
+        // La vista no toca las preferencias: no tiene por que conocerlas, y
+        // ademas leerlas en `onDraw` seria tocar disco por cuadro. Quien las
+        // guarda es la Activity, que ya tiene el `Context` bueno.
+
+        /** Mueve la correccion de esa rueda. Devuelve la resultante, en PSI. */
+        fun calibrarLlanta(rueda: Int, pasos: Int): Float
+
+        /** Deja esa rueda —o las cuatro— sin correccion. */
+        fun calibrarACero(rueda: Int)
+
+        /** La correccion guardada de esa rueda, en PSI. */
+        fun ajusteLlanta(rueda: Int): Float
+
+        /** ¿Un toque corrige las cuatro? */
+        fun calibrarTodasALaVez(): Boolean
+
+        fun ponerCalibrarTodasALaVez(valor: Boolean)
     }
 
     // --- Estado de la vista -------------------------------------------------
@@ -136,6 +156,19 @@ class TableroLienzo(
 
         /** Por debajo de esto no se lee de reojo; se corta y se marca. */
         const val SUELO_BOTON = 0.55f
+
+        /**
+         * Cuanto hay que sostener el dedo para abrir el calibrador.
+         *
+         * Los mismos 600 ms del tablero HTML, mas que los 500 de Android a
+         * proposito: en un carro que se mueve se toca la pantalla sin querer,
+         * y esto NO es un menu contextual que se cierra solo — es un mando que
+         * cambia el numero por el que suena la alarma de presion.
+         */
+        const val SOSTENIDO_MS = 600L
+
+        /** Holgura del sostenido, AL CUADRADO para no sacar raices. */
+        const val HOLGURA_MS2 = 24f * 24f
     }
 
     private var botonPulsado = NADA
@@ -239,6 +272,17 @@ class TableroLienzo(
         if (reparto.conNevera) PintaNevera.pintar(canvas, reparto.nevera, d, t, pincel)
         PintaMotor.pinta(canvas, reparto.motor, d, t, pincel)
         PintaLlantas.pintar(canvas, reparto.llantas, d, t, pincel)
+
+        // El ultimo, encima de todo: es una capa modal. Y el ajuste se le pasa
+        // LEIDO AHORA, no cacheado, para que lo que se ve sea lo guardado.
+        if (PintaCalibracion.abierto) {
+            PintaCalibracion.pintar(
+                canvas, cajaPantalla,
+                mandos.ajusteLlanta(PintaCalibracion.rueda),
+                mandos.calibrarTodasALaVez(),
+                pincel,
+            )
+        }
     }
 
     /**
@@ -312,6 +356,11 @@ class TableroLienzo(
         val x = evento.x
         val y = evento.y
 
+        // El calibrador es una capa MODAL: mientras esta abierto se come el
+        // dedo entero. Sin esto, un toque que caiga sobre el velo llegaria al
+        // boton de la nevera que hay debajo y que ya no se ve.
+        if (PintaCalibracion.abierto) return calibrando(evento, x, y)
+
         when (evento.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // Reloj propio: `ahora` es el del CUADRO y va emparejado con
@@ -319,6 +368,17 @@ class TableroLienzo(
                 // lectura que se esta pintando, que es justo lo que el reloj
                 // unico existe para impedir.
                 val toque = System.currentTimeMillis()
+
+                // El dedo sostenido sobre una rueda abre el calibrador. Se
+                // arma aqui y se desarma en cuanto el dedo se mueve o se
+                // levanta: sostenido de verdad, no "tocado despacio".
+                ruedaSostenida = PintaLlantas.ruedaEn(x, y)
+                if (ruedaSostenida >= 0) {
+                    xAbajo = x
+                    yAbajo = y
+                    postDelayed(abrirCalibrador, SOSTENIDO_MS)
+                }
+
                 botonPulsado = when {
                     reparto.botonAverias.contiene(x, y) -> B_AVERIAS
                     reparto.botonAjustes.contiene(x, y) -> B_AJUSTES
@@ -333,9 +393,25 @@ class TableroLienzo(
                 return true
             }
 
+            MotionEvent.ACTION_MOVE -> {
+                // Arrastrar cancela el sostenido. El umbral no es cosmetico:
+                // en un carro andando el dedo NUNCA se queda quieto del todo,
+                // y sin holgura el calibrador no se abriria jamas en marcha,
+                // que es justo cuando se ve que una llanta va rara.
+                if (ruedaSostenida >= 0) {
+                    val dx = x - xAbajo
+                    val dy = y - yAbajo
+                    if (dx * dx + dy * dy > HOLGURA_MS2) soltarSostenido()
+                }
+                return true
+            }
+
             MotionEvent.ACTION_UP -> {
                 val boton = botonPulsado
                 val mando = mandoPulsado
+                // Levantar el dedo antes de tiempo NO abre nada: eso es un
+                // toque, y un toque sobre una rueda no hace nada a proposito.
+                soltarSostenido()
                 botonPulsado = NADA
                 mandoPulsado = null
                 PintaNevera.soltar()
@@ -360,6 +436,7 @@ class TableroLienzo(
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                soltarSostenido()
                 botonPulsado = NADA
                 mandoPulsado = null
                 PintaNevera.soltar()
@@ -367,6 +444,98 @@ class TableroLienzo(
                 return true
             }
         }
+        return true
+    }
+
+    // --- El calibrador de llantas -------------------------------------------
+
+    /** La rueda bajo el dedo mientras se cuenta el sostenido, o -1. */
+    private var ruedaSostenida = -1
+    private var xAbajo = 0f
+    private var yAbajo = 0f
+
+    private val abrirCalibrador = Runnable {
+        val cual = ruedaSostenida
+        ruedaSostenida = -1
+        if (cual >= 0) {
+            // Se cancela lo que hubiera pulsado debajo: el dedo ya no va a
+            // soltar sobre un boton, va a soltar sobre el calibrador.
+            botonPulsado = NADA
+            mandoPulsado = null
+            PintaNevera.soltar()
+            PintaCalibracion.abrir(cual)
+            invalidate()
+        }
+    }
+
+    private fun soltarSostenido() {
+        if (ruedaSostenida >= 0) {
+            ruedaSostenida = -1
+            removeCallbacks(abrirCalibrador)
+        }
+    }
+
+    /**
+     * El dedo mientras el calibrador esta abierto.
+     *
+     * Se manda al SOLTAR y solo si el dedo sigue sobre el mismo mando, igual
+     * que los botones de la cabecera. Y `+` / `−` NO se repiten al mantener:
+     * la correccion util son dos o tres pasos, y una repeticion automatica
+     * pasada de vueltas dejaria la rueda descalibrada del otro lado.
+     */
+    private fun calibrando(evento: MotionEvent, x: Float, y: Float): Boolean {
+        when (evento.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                mandoCal = PintaCalibracion.tocar(x, y)
+                invalidate()
+            }
+
+            MotionEvent.ACTION_UP -> {
+                val m = mandoCal
+                mandoCal = null
+                PintaCalibracion.soltar()
+                if (m != null && PintaCalibracion.mandoEn(x, y) == m) {
+                    performClick()
+                    obedecerCal(m)
+                }
+                invalidate()
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                mandoCal = null
+                PintaCalibracion.soltar()
+                invalidate()
+            }
+        }
+        return true
+    }
+
+    private var mandoCal: PintaCalibracion.Mando? = null
+
+    private fun obedecerCal(m: PintaCalibracion.Mando) {
+        val rueda = PintaCalibracion.rueda
+        if (rueda < 0) return
+        when (m) {
+            PintaCalibracion.Mando.MENOS -> mandos.calibrarLlanta(rueda, -1)
+            PintaCalibracion.Mando.MAS -> mandos.calibrarLlanta(rueda, 1)
+            PintaCalibracion.Mando.CERO -> mandos.calibrarACero(rueda)
+            PintaCalibracion.Mando.TODAS ->
+                mandos.ponerCalibrarTodasALaVez(!mandos.calibrarTodasALaVez())
+            PintaCalibracion.Mando.LISTO, PintaCalibracion.Mando.FUERA ->
+                PintaCalibracion.cerrar()
+        }
+    }
+
+    /**
+     * ¿Se puede cerrar el calibrador con la tecla de atras?
+     *
+     * La Activity pregunta antes de salirse del tablero. Un modal del que no
+     * se sale con "atras" es un modal en el que la gente se queda encerrada.
+     */
+    fun cerrarCalibradorSiAbierto(): Boolean {
+        if (!PintaCalibracion.abierto) return false
+        PintaCalibracion.cerrar()
+        invalidate()
         return true
     }
 

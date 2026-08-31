@@ -1377,6 +1377,11 @@ body{
     if(t) t.textContent = "Calibrar " + (RUEDAS[i] || "");
     calRefrescar();
     var c = el("cal"); if(c) c.classList.add("abierto");
+    // Se le dice a la app que hay un modal delante, para que la tecla de
+    // ATRAS lo cierre a el y no el tablero entero. En la variante Canvas eso
+    // sale gratis —la vista sabe lo que pinta—; aqui hay que contarlo, o los
+    // dos tableros del mismo carro responden distinto al mismo boton.
+    try{ if(window.Puente && Puente.calibradorVisible) Puente.calibradorVisible(true); }catch(e){}
   }
 
   function calRefrescar(){
@@ -1391,7 +1396,14 @@ body{
 
   function calCerrar(){
     var c = el("cal"); if(c) c.classList.remove("abierto");
+    try{ if(window.Puente && Puente.calibradorVisible) Puente.calibradorVisible(false); }catch(e){}
   }
+
+  /* La UNICA funcion que sale de este cierre. La necesita la tecla de ATRAS,
+     que se maneja en Kotlin y llama por `evaluateJavascript`: sin exportarla,
+     la llamada revienta con un ReferenceError QUE NADIE VE —evaluateJavascript
+     se traga el error— y el modal se queda abierto tapando el tablero. */
+  window.calCerrar = calCerrar;
 
   // El gesto sostenido sobre cada casilla de rueda.
   (function(){

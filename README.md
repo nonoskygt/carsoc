@@ -92,10 +92,16 @@ lo dice en vez de inventarse un número.
 
 ![](docs/img/calibrar-llanta.png)
 
+| HTML | Canvas |
+|---|---|
+| ![](docs/img/calibrar-llanta.png) | ![](docs/img/calibrar-canvas.png) |
+
 Los sensores TPMS baratos se desvían por una constante. Se corrigen
 **sosteniendo el dedo** sobre una rueda —sostenido, no un toque: a media
 curva se toca cualquier cosa—, y por omisión la corrección se aplica a las
-cuatro.
+cuatro. Está en las **dos variantes y los dos carros**, con el mismo gesto y
+guardando en el mismo sitio: una rueda calibrada desde el tablero HTML sale
+ya corregida en el de Canvas.
 
 La corrección se aplica **en la capa de datos, no al pintar**. Si solo
 corrigiera lo dibujado, una rueda calibrada a −3 PSI daría la alarma tres
@@ -105,9 +111,9 @@ libras antes de tiempo todos los días, hasta que aprendieras a ignorarla.
 
 ![](docs/img/variante-canvas.png)
 
-*La misma app, pintada en Canvas nativo.* Se elige en ajustes. La de Canvas
-es más ligera y **deja que el guardián térmico gobierne los fotogramas**:
-baja a uno por segundo cuando el radio se calienta. La de HTML no hace eso.
+*El S2000 pintado en Canvas nativo.* Se elige en ajustes. La de Canvas es más
+ligera y **deja que el guardián térmico gobierne los fotogramas**: baja a uno
+por segundo cuando el radio se calienta. La de HTML no hace eso.
 
 ## El menú de emparejamiento
 
@@ -145,9 +151,16 @@ como se descubrió que el tablero del S2000 se rompía.
 powershell -ExecutionPolicy Bypass -File tools/e2e.ps1
 ```
 
-Compila los dos sabores, los instala, los abre, navega sus pantallas y deja
-las capturas en `build/e2e/`. Una prueba de interfaz que solo dice «pasó» y
-no enseña nada no vale de mucho.
+Compila los dos sabores, los instala y recorre **las dos variantes de cada
+uno** —cuatro tableros—, navega sus pantallas, calibra una llanta y deja las
+capturas en `build/e2e/`. Una prueba de interfaz que solo dice «pasó» y no
+enseña nada no vale de mucho.
+
+Toca los botones de verdad en vez de lanzar las pantallas por intent, y eso
+ya se ha pagado dos veces: así se descubrió que el tablero del S2000 se había
+quedado **sin botón de ajustes** —con el menú de emparejamiento inalcanzable
+en ese carro— y que el Canvas del S2000 tachaba cinco celdas del motor por no
+caber.
 
 > Si el emulador nunca arranca, casi seguro es el diálogo de consentimiento
 > que aparece tras una caída previa y **bloquea el arranque esperando un

@@ -204,6 +204,63 @@ class TableroActivity : Activity(), TableroLienzo.Mandos {
         }
     }
 
+    // --- Calibracion de llantas para la variante Canvas ---------------------
+    //
+    // Son los MISMOS metodos que el `Puente` le da al JavaScript, y a
+    // proposito: las dos variantes del tablero corrigen las llantas por el
+    // mismo camino y guardan en el mismo sitio, asi que una rueda calibrada
+    // desde el tablero HTML sale ya corregida en el de Canvas. Si cada una
+    // guardara lo suyo, cambiar de variante en ajustes descalibraria el carro
+    // sin avisar.
+
+    override fun calibrarLlanta(rueda: Int, pasos: Int): Float =
+        com.nonosky.s2000dash.config.CalibracionLlantas.mover(this, rueda, pasos)
+
+    override fun calibrarACero(rueda: Int) {
+        com.nonosky.s2000dash.config.CalibracionLlantas.poner(this, rueda, 0f)
+    }
+
+    override fun ajusteLlanta(rueda: Int): Float =
+        com.nonosky.s2000dash.config.CalibracionLlantas.ajuste(this, rueda)
+
+    override fun calibrarTodasALaVez(): Boolean =
+        com.nonosky.s2000dash.config.CalibracionLlantas.aplicarATodas(this)
+
+    override fun ponerCalibrarTodasALaVez(valor: Boolean) {
+        com.nonosky.s2000dash.config.CalibracionLlantas.ponerAplicarATodas(this, valor)
+    }
+
+    /**
+     * "Atras" cierra el calibrador antes de salir del tablero.
+     *
+     * Sin esto, la unica salida del calibrador seria el boton LISTO. Un modal
+     * a pantalla completa del que la tecla de siempre no saca es un modal en
+     * el que la gente se queda encerrada, y aqui ademas taparia el tablero
+     * entero: las llantas, el motor y las baterias dejarian de verse.
+     */
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (lienzo?.cerrarCalibradorSiAbierto() == true) return
+        if (calibradorHtmlAbierto) {
+            // Se cierra por el mismo camino que el boton LISTO, no tocando el
+            // DOM desde aqui: asi el aviso de vuelta —`calibradorVisible(false)`—
+            // sale de un solo sitio y no puede quedarse encendido.
+            calibradorHtmlAbierto = false
+            runCatching { web?.evaluateJavascript("calCerrar()", null) }
+            return
+        }
+        super.onBackPressed()
+    }
+
+    /**
+     * ¿El calibrador del tablero HTML esta delante?
+     *
+     * Lo escribe el hilo del WebView y lo lee el de interfaz, de ahi el
+     * `@Volatile`. Es un booleano, asi que no hace falta mas.
+     */
+    @Volatile
+    private var calibradorHtmlAbierto = false
+
     /**
      * Lo unico que el JavaScript puede llamar.
      *
@@ -259,6 +316,20 @@ class TableroActivity : Activity(), TableroLienzo.Mandos {
         @JavascriptInterface
         fun pasoCalibracion(): Float =
             com.nonosky.s2000dash.config.CalibracionLlantas.PASO_PSI
+
+        /**
+         * El tablero HTML avisa de que su calibrador esta delante.
+         *
+         * Sirve para una sola cosa: que ATRAS cierre el modal y no el tablero.
+         * La variante Canvas no necesita contarlo —la vista sabe lo que
+         * pinta—, pero el WebView es una caja negra desde aqui, asi que si no
+         * lo dice, no se sabe. Y sin saberlo, el mismo boton hace dos cosas
+         * distintas en los dos tableros del mismo carro.
+         */
+        @JavascriptInterface
+        fun calibradorVisible(abierto: Boolean) {
+            calibradorHtmlAbierto = abierto
+        }
 
         @JavascriptInterface
         fun abrirConfiguracion() {

@@ -143,6 +143,23 @@ object PintaLlantas {
         pintarAceite(canvas, d, pincel)
     }
 
+    /**
+     * Que rueda hay bajo ese punto, o -1.
+     *
+     * Existe para el calibrador: el dedo sostenido sobre una casilla la abre.
+     * El blanco es la CASILLA ENTERA, no el dibujo de la llanta, porque el
+     * dibujo mide una fraccion de ella y en movimiento no se acierta.
+     *
+     * Devuelve -1 mientras el reparto no sea valido: sin cajas buenas, decir
+     * "esta es la DI" seria inventarse una posicion, y quien sostenga el dedo
+     * abriria el calibrador de una rueda al azar.
+     */
+    fun ruedaEn(x: Float, y: Float): Int {
+        if (!trazado.valido || !trazado.hayLlantas) return -1
+        for (i in 0 until 4) if (trazado.casilla[i].contiene(x, y)) return i
+        return -1
+    }
+
     // --- Llantas ------------------------------------------------------------
 
     private fun pintarLlantas(canvas: Canvas, d: DatosTablero, ahora: Long, pincel: Pincel) {
