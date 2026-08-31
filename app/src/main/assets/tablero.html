@@ -371,11 +371,11 @@ body{
 
     <div class="links">
       <span class="k">Enlaces</span>
-      <span class="pip" title="BMS arranque"></span>
-      <span class="pip" title="BMS vivienda"></span>
-      <span class="pip" title="Nevera"></span>
-      <span class="pip" title="TPMS CH340"></span>
-      <span class="pip hollow last" title="OBD K-line: al limite"></span>
+      <span class="pip hollow" id="pip-arr" title="BMS arranque"></span>
+      <span class="pip hollow" id="pip-viv" title="BMS vivienda"></span>
+      <span class="pip hollow" id="pip-nev" title="Nevera"></span>
+      <span class="pip hollow" id="pip-tpms" title="TPMS CH340"></span>
+      <span class="pip hollow last" id="pip-obd" title="OBD K-line"></span>
     </div>
 
     <span class="vr"></span>
@@ -508,7 +508,7 @@ body{
         <span class="nm i-sand">Llantas</span>
         <span class="sub">TPMS · CH340</span>
         <span class="ld"></span>
-        <span class="chip-al"><span class="d"></span>TD baja</span>
+        <span class="chip-al" id="ll-aviso" style="display:none"><span class="d"></span><span id="ll-aviso-txt">TD baja</span></span>
       </div>
 
       <div class="tg">
@@ -578,7 +578,7 @@ body{
           </div>
           <div class="psi"><span id="ll3-psi">24</span><i>PSI</i></div>
           <div class="tmp"><span id="ll3-t">31</span> °C
-            <span class="flag"><svg viewBox="0 0 16 16">
+            <span class="flag" id="ll3-flag" style="display:none"><svg viewBox="0 0 16 16">
               <path d="M8 2.4 15 13.6H1z"/><path d="M8 6.6v3.4"/>
               <circle cx="8" cy="11.9" r=".75" fill="currentColor" stroke="none"/>
             </svg>Baja</span>
@@ -750,6 +750,11 @@ body{
 
   function el(id){ return document.getElementById(id); }
 
+  function pip(id, vivo){
+    var e = el(id); if(!e) return;
+    if(vivo === true) e.classList.remove("hollow"); else e.classList.add("hollow");
+  }
+
   // pinta un valor; null/undefined -> "--" y el bloque se apaga
   function set(id, v, dec){
     var e = el(id); if(!e) return;
@@ -782,11 +787,30 @@ body{
     }
   }
 
+  // Nombres cortos de rueda, en el mismo orden que los manda el servicio.
+  var RUEDAS = ["DI", "DD", "TI", "TD"];
+
   function llanta(i, psi, temp, baja){
     set("ll" + i + "-psi", psi);
     set("ll" + i + "-t", temp);
-    var c = el("ll" + i); if(!c) return;
-    if(baja) c.classList.add("alarm"); else c.classList.remove("alarm");
+    var c = el("ll" + i);
+    if(c){ if(baja) c.classList.add("alarm"); else c.classList.remove("alarm"); }
+    // La bandera solo existe hoy en la trasera derecha del boceto; se
+    // enciende y se apaga con el dato, nunca queda pintada de adorno.
+    var f = el("ll" + i + "-flag");
+    if(f) f.style.display = baja ? "" : "none";
+  }
+
+  // El aviso de la cabecera nombra la PRIMERA rueda baja. Si no hay
+  // ninguna, no se pinta: un aviso permanente es un aviso que se ignora.
+  function avisoLlantas(bajas){
+    var chip = el("ll-aviso"), txt = el("ll-aviso-txt");
+    if(!chip) return;
+    if(!bajas.length){ chip.style.display = "none"; return; }
+    chip.style.display = "";
+    if(txt) txt.textContent = bajas.length === 1
+      ? (RUEDAS[bajas[0]] + " baja")
+      : (bajas.length + " llantas bajas");
   }
 
   function pintar(d){
@@ -824,6 +848,12 @@ body{
     llanta(1, d.ll1psi, d.ll1t, d.ll1baja);
     llanta(2, d.ll2psi, d.ll2t, d.ll2baja);
     llanta(3, d.ll3psi, d.ll3t, d.ll3baja);
+    var bajas = [];
+    if(d.ll0baja) bajas.push(0);
+    if(d.ll1baja) bajas.push(1);
+    if(d.ll2baja) bajas.push(2);
+    if(d.ll3baja) bajas.push(3);
+    avisoLlantas(bajas);
 
     // --- arranque, aceite, radio ---
     set("arr-soc", d.arrSoc);
@@ -834,6 +864,14 @@ body{
     set("nev-on", d.nevOn);
     set("ace-km", d.aceKm); set("ace-h", d.aceH);
     set("hd-cod", d.codigos);
+
+    // Los puntos de enlace. Hueco = esa fuente NO esta dando datos.
+    // Importa mas de lo que parece: si muere el receptor de las llantas, las
+    // cuatro presiones se quedan congeladas en el ultimo valor bueno y
+    // siguen pareciendo correctas. El punto es lo unico que lo delata.
+    pip("pip-arr", d.okArr);   pip("pip-viv", d.okViv);
+    pip("pip-nev", d.okNev);   pip("pip-tpms", d.okTpms);
+    pip("pip-obd", d.okObd);
     var mil = el("hd-mil");
     if(mil) mil.textContent = (d.mil === true) ? "Luz de avería" : (d.mil === false ? "Sin avería" : GUION);
     set("ace-pct", d.acePct);

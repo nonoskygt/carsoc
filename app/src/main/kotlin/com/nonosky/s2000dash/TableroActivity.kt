@@ -229,6 +229,17 @@ class TableroActivity : Activity() {
                 num("mil", null); num("codigos", null)
             }
 
+            // ---------- puntos de enlace ----------
+            // No es adorno. Si el receptor de las llantas muere, las cuatro
+            // presiones se quedan congeladas en su ultimo valor bueno y
+            // siguen pareciendo correctas: el punto es lo unico que lo
+            // delata. Cada uno dice si ESA fuente esta dando datos ahora.
+            num("okViv", batViva)
+            num("okArr", false)   // pendiente: un solo BMS sostenido
+            num("okNev", false)   // pendiente: enlace Alpicool
+            num("okTpms", tp != null && tp.ruedas.isNotEmpty())
+            num("okObd", fresco(v.rpmAtMs) || fresco(v.coolantAtMs))
+
             j.append('}')
             return j.toString()
         }
