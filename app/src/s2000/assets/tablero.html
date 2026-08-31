@@ -166,7 +166,10 @@ body{
 .mil.on{color:var(--amber)}
 .mil.on svg{opacity:1}
 
-/* UNICO elemento tactil del tablero: 44x44 reales, sin hover, con :active */
+/* Los mandos de la cabecera: 44x44 reales, sin hover, con :active.
+   Son dos —averias y ajustes— y por eso .hblk.link cede antes que ellos:
+   el enlace se recorta con puntos suspensivos y los dos blancos tactiles
+   quedan intactos hasta 800x480. */
 .btn{
   flex:0 0 auto;margin-left:1.3rem;
   min-height:44px;min-width:44px;padding:0 1.4rem;
@@ -701,6 +704,13 @@ body{
     </div>
 
     <div class="btn" id="btn-diag" role="button" tabindex="0">Aver&iacute;as <b id="hd-cod">0</b></div>
+
+    <!-- AJUSTES: la unica puerta al menu de emparejamiento.
+         Falto en la primera version de este tablero, y el efecto no era
+         cosmetico: sin el, en este carro NO habia forma de asignar el BMS
+         ni el adaptador OBD desde la pantalla. La ConfiguracionActivity no
+         esta exportada a proposito, asi que sin boton no se llega. -->
+    <div class="btn" id="btn-config" role="button" tabindex="0">Ajustes</div>
   </header>
 
   <!-- ========================= REJILLA ========================= -->
@@ -1277,13 +1287,15 @@ body{
     pip("pip-obd", d.okObd); pip("pip-tpms", d.okTpms); pip("pip-arr", d.okArr);
   }
 
-  /* El unico mando del tablero. Un toque encola el comando; el boton no se
+  /* Los dos mandos de la cabecera. Un toque encola la accion; el boton no se
      pinta al tocarlo mas alla del :active, porque un boton que se enciende
      porque el tablero mando algo miente igual que un valor inventado. */
-  var bd = el("btn-diag");
-  if(bd) bd.addEventListener("click", function(){
-    try{ if(window.Puente && Puente.abrirDiagnostico) Puente.abrirDiagnostico(); }catch(e){}
-  });
+  function cabecera(id, hacer){
+    var b = el(id);
+    if(b) b.addEventListener("click", function(){ try{ hacer(); }catch(e){} });
+  }
+  cabecera("btn-diag",   function(){ if(window.Puente && Puente.abrirDiagnostico) Puente.abrirDiagnostico(); });
+  cabecera("btn-config", function(){ if(window.Puente && Puente.abrirConfiguracion) Puente.abrirConfiguracion(); });
 
   function tic(){
     try{

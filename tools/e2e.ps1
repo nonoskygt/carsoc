@@ -59,10 +59,10 @@ Write-Host ("      " + $res)
 $sabores = @(
   @{ clave="element"; tarea="assembleElementRelease"; pkg="com.nonosky.inmyelement"
      apk="app\build\outputs\apk\element\release\app-element-release.apk"
-     papeles=4; carro="Honda Element" },
+     papeles=4; carro="Honda Element"; ajustesX=458; ajustesY=389 },
   @{ clave="s2000";   tarea="assembleS2000Release";   pkg="com.nonosky.s2000dash"
      apk="app\build\outputs\apk\s2000\release\app-s2000-release.apk"
-     papeles=2; carro="Honda S2000" }
+     papeles=2; carro="Honda S2000"; ajustesX=962; ajustesY=37 }
 )
 
 foreach ($s in $sabores) {
@@ -91,11 +91,20 @@ foreach ($s in $sabores) {
   Comprobar "captura el tablero" (Test-Path "$SALIDA\$($s.clave)-tablero.png")
 
   # El menu NO esta exportado a proposito, asi que se llega tocando el
-  # boton — que ademas es como lo usa el dueño.
-  & $ADB shell input tap 458 389
+  # boton — que ademas es como lo usa el dueño. Y por eso esta comprobacion
+  # vale la pena: cuando el tablero del S2000 se rediseño, se quedo SIN
+  # boton de ajustes y el menu de emparejamiento se volvio inalcanzable en
+  # ese carro. Lo unico que lo delato fue este toque fallando.
+  #
+  # Las coordenadas van por sabor porque los dos tableros ponen el boton en
+  # sitios distintos: el del Element vive en el rotulo de la tarjeta de
+  # motor y el del S2000 en la cabecera. Un WebView no aparece en el volcado
+  # de uiautomator, asi que no hay forma de buscarlo por nombre.
+  & $ADB shell input tap $($s.ajustesX) $($s.ajustesY)
   Start-Sleep -Seconds 5
   $foco2 = (& $ADB shell "dumpsys window | grep mCurrentFocus") -join " "
-  Comprobar "abre la configuracion" ($foco2 -match "ConfiguracionActivity") $foco2
+  Comprobar "abre la configuracion" ($foco2 -match "ConfiguracionActivity") `
+    ("toque en $($s.ajustesX),$($s.ajustesY) -> " + $foco2)
 
   & $ADB shell screencap -p /data/local/tmp/e2e2.png 2>$null
   & $ADB pull /data/local/tmp/e2e2.png "$SALIDA\$($s.clave)-config.png" 2>&1 | Out-Null
