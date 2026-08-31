@@ -75,6 +75,40 @@ diez pruebas que decodifican capturas reales.
 el motor concreto**: 102 para el K24A4, 81 para el F20C. Nada de códigos que
 ese carro no puede dar.
 
+## Los dos tableros
+
+| **In my element** — topográfico | **S2000 Dash** — cyberpunk |
+|---|---|
+| ![](docs/img/element-tablero.png) | ![](docs/img/s2000-cyberpunk.png) |
+
+Hermanos, no gemelos. Uno es una casa rodante donde manda el litio; el otro
+un roadster que gira a 9 000 y donde el VTEC **sí** es un acontecimiento.
+
+Fíjate en el S2000: su reloj de mezcla está **apagado**, con la leyenda `SIN
+PID 0134 · BANDA ESTRECHA`. Ese carro no puede medir la mezcla, y el tablero
+lo dice en vez de inventarse un número.
+
+## Calibrar las llantas
+
+![](docs/img/calibrar-llanta.png)
+
+Los sensores TPMS baratos se desvían por una constante. Se corrigen
+**sosteniendo el dedo** sobre una rueda —sostenido, no un toque: a media
+curva se toca cualquier cosa—, y por omisión la corrección se aplica a las
+cuatro.
+
+La corrección se aplica **en la capa de datos, no al pintar**. Si solo
+corrigiera lo dibujado, una rueda calibrada a −3 PSI daría la alarma tres
+libras antes de tiempo todos los días, hasta que aprendieras a ignorarla.
+
+## Las dos variantes de tablero
+
+![](docs/img/variante-canvas.png)
+
+*La misma app, pintada en Canvas nativo.* Se elige en ajustes. La de Canvas
+es más ligera y **deja que el guardián térmico gobierne los fotogramas**:
+baja a uno por segundo cuando el radio se calienta. La de HTML no hace eso.
+
 ## El menú de emparejamiento
 
 Cada aparato se asigna a mano a su papel. Nunca por barrido — así es

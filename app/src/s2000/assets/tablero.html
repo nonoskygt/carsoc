@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>S2000 · Tablero</title>
 <style>
+/* Sin esto, sostener el dedo sobre una casilla abre la SELECCION DE TEXTO
+   del WebView en vez del calibrador. En un tablero no hay nada que
+   seleccionar. */
+html,body{-webkit-user-select:none;user-select:none;
+          -webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+
 /* ==========================================================================
    HONDA S2000 AP1 · F20C — TABLERO  (sabor s2000)
    Direccion de arte: INSTRUMENTO DE PRECISION.
@@ -581,9 +587,77 @@ body{
      rotulo de la region ya dice "zona roja 8300 · corte 9000" */
   .marks .mn{display:none}
 }
+/* ============ CALIBRACION DE LLANTAS ============
+   ⚠️ Con colores PROPIOS y no con las variables del tema: esta capa se
+   porto del tablero del Element, que define --moss y --ink1. Aqui no
+   existen, y la marca de la casilla salia invisible — parecia
+   desmarcada estando activa, que es peor que no tenerla.
+   Los sensores TPMS baratos se desvian por una constante. Se corrige
+   sosteniendo el dedo sobre la rueda: sostenido y no un toque, porque un
+   toque suelto a media curva no puede cambiar una calibracion.
+   ================================================ */
+#cal{position:fixed;top:0;left:0;right:0;bottom:0;z-index:60;display:none;
+     align-items:center;justify-content:center;background:rgba(6,10,14,.88)}
+#cal.abierto{display:flex}
+.calcaja{width:430px;background:#101820;border:1px solid #2C3A46;
+         border-radius:4px;padding:18px 20px}
+.caltit{font-size:12px;font-weight:700;letter-spacing:.2em;color:#9FB3C4;
+        text-transform:uppercase}
+.calsub{font-size:10.5px;color:#6C7F8E;margin-top:5px;line-height:1.5}
+.calfila{display:flex;align-items:center;gap:10px;margin-top:16px}
+.calval{flex:1 1 auto;text-align:center;font-size:38px;font-weight:700;
+        color:#E6EDF3;line-height:1}
+.calval i{font-size:13px;font-style:normal;font-weight:600;color:#9FB3C4;
+          margin-left:4px}
+.calbtn{flex:0 0 68px;height:56px;display:flex;align-items:center;
+        justify-content:center;background:rgba(0,0,0,.3);
+        border:1px solid #2C3A46;border-radius:3px;font-size:28px;
+        font-weight:700;color:#9FB3C4;-webkit-user-select:none;user-select:none}
+.calbtn:active{background:rgba(166,255,46,.18);border-color:#A6FF2E;color:#E6EDF3}
+.calpie{display:flex;align-items:center;gap:9px;margin-top:16px;
+        min-height:44px;-webkit-user-select:none;user-select:none}
+.calmarca{width:22px;height:22px;flex:0 0 auto;border:1.6px solid #2C3A46;
+          border-radius:3px;position:relative}
+.calmarca.si{border-color:#A6FF2E}
+.calmarca.si::after{content:"";position:absolute;left:6px;top:2px;width:6px;height:12px;
+  border:solid #A6FF2E;border-width:0 2.4px 2.4px 0;transform:rotate(42deg)}
+.calpie span{font-size:12px;color:#9FB3C4}
+.calcerrar{display:flex;gap:8px;margin-top:14px}
+.calcerrar div{flex:1 1 auto;height:46px;display:flex;align-items:center;
+  justify-content:center;background:rgba(0,0,0,.3);border:1px solid #2C3A46;
+  border-radius:3px;font-size:12px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:#9FB3C4;-webkit-user-select:none;user-select:none}
+.calcerrar div:active{background:rgba(255,178,36,.18);border-color:#FFB224}
+
+
 </style>
 </head>
 <body>
+<!-- ============ CALIBRACION DE LLANTAS ============ -->
+<div id="cal">
+  <div class="calcaja">
+    <div class="caltit" id="cal-tit">Calibrar DI</div>
+    <div class="calsub">
+      Corrige lo que reporta el sensor. Estos sensores se desvían por una
+      constante: infla con un manómetro bueno y ajusta hasta que cuadre.
+    </div>
+    <div class="calfila">
+      <div class="calbtn" id="cal-menos">&minus;</div>
+      <div class="calval"><span id="cal-val">+0.0</span><i>PSI</i></div>
+      <div class="calbtn" id="cal-mas">+</div>
+    </div>
+    <div class="calpie" id="cal-todas">
+      <span class="calmarca si" id="cal-marca"></span>
+      <span>Aplicar la misma corrección a las cuatro llantas</span>
+    </div>
+    <div class="calcerrar">
+      <div id="cal-cero">A cero</div>
+      <div id="cal-listo">Listo</div>
+    </div>
+  </div>
+</div>
+
+
 
 <div class="dash">
 
@@ -1221,5 +1295,86 @@ body{
 })();
 </script>
 
+<script>
+(function(){
+  // Helpers propios: este tablero no comparte el motor del hermano, pero si
+  // el contrato del puente. La calibracion es identica en los dos.
+  function calEl(id){ return document.getElementById(id); }
+  function calMando(id, accion){
+    var e = calEl(id); if(!e) return;
+    e.addEventListener("click", function(){ try{ accion(); }catch(err){} });
+  }
+  var RUEDAS_CAL = ["DI","DD","TI","TD"];
+  // ============ CALIBRACION DE LLANTAS ============
+  //
+  // Se abre SOSTENIENDO el dedo sobre una rueda, 600 ms, el mismo gesto que
+  // el boton de cerrar del tablero del S2000. Un toque suelto no puede
+  // cambiar una calibracion: a media curva se toca cualquier cosa.
+  var RUEDA_CAL = 0;
+  var SOSTENIDO = null;
+  var MS_SOSTENER = 600;
+
+  function calAbrir(i){
+    RUEDA_CAL = i;
+    var t = calEl("cal-tit");
+    if(t) t.textContent = "Calibrar " + (RUEDAS_CAL[i] || "");
+    calRefrescar();
+    var c = calEl("cal"); if(c) c.classList.add("abierto");
+  }
+
+  function calRefrescar(){
+    try{
+      var v = Puente.ajusteLlanta(RUEDA_CAL);
+      var e = calEl("cal-val");
+      if(e) e.textContent = (v > 0 ? "+" : "") + v.toFixed(1);
+      var m = calEl("cal-marca");
+      if(m) m.classList.toggle("si", Puente.calibrarTodasALaVez() === true);
+    }catch(err){}
+  }
+
+  function calCerrar(){
+    var c = calEl("cal"); if(c) c.classList.remove("abierto");
+  }
+
+  // El gesto sostenido sobre cada casilla de rueda.
+  (function(){
+    for(var i = 0; i < 4; i++){
+      (function(idx){
+        var caja = calEl("ll" + idx);
+        if(!caja) return;
+        function empezar(ev){
+          if(ev && ev.preventDefault) ev.preventDefault();
+          if(SOSTENIDO) clearTimeout(SOSTENIDO);
+          SOSTENIDO = setTimeout(function(){ SOSTENIDO = null; calAbrir(idx); }, MS_SOSTENER);
+        }
+        function soltar(){
+          if(SOSTENIDO){ clearTimeout(SOSTENIDO); SOSTENIDO = null; }
+        }
+        caja.addEventListener("touchstart", empezar, {passive:false});
+        caja.addEventListener("touchend", soltar);
+        caja.addEventListener("touchcancel", soltar);
+        // Con raton, para poder probarlo en la laptop.
+        caja.addEventListener("mousedown", empezar);
+        caja.addEventListener("mouseup", soltar);
+        caja.addEventListener("mouseleave", soltar);
+      })(i);
+    }
+  })();
+
+  calMando("cal-menos", function(){ try{ Puente.calibrarLlanta(RUEDA_CAL, -1); }catch(e){} calRefrescar(); });
+  calMando("cal-mas",   function(){ try{ Puente.calibrarLlanta(RUEDA_CAL,  1); }catch(e){} calRefrescar(); });
+  calMando("cal-cero",  function(){ try{ Puente.calibrarACero(RUEDA_CAL); }catch(e){} calRefrescar(); });
+  calMando("cal-listo", calCerrar);
+  calMando("cal-todas", function(){
+    try{
+      var ahora = Puente.calibrarTodasALaVez() === true;
+      Puente.ponerCalibrarTodasALaVez(!ahora);
+    }catch(e){}
+    calRefrescar();
+  });
+
+
+})();
+</script>
 </body>
 </html>
